@@ -81,7 +81,8 @@ class TestCity:
         assert normalize_city("三亚市")[1] == "CN"
 
     def test_unknown_latin(self):
-        assert normalize_city("Berlin")[1] == "XX"
+        assert normalize_city("Berlin")[1] == "DE"  # DIDA 海外驻地，已收录
+        assert normalize_city("Zaragoza")[1] == "XX"  # 未收录城市
 
 
 class TestExperience:

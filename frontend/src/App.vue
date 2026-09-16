@@ -7,6 +7,7 @@
       <div class="brand">旅行行业薪酬看板</div>
       <el-menu mode="horizontal" router :default-active="$route.path" :ellipsis="false" class="menu">
         <el-menu-item index="/">总览</el-menu-item>
+        <el-menu-item index="/benchmark">岗位对标</el-menu-item>
         <el-menu-item index="/companies">公司名单</el-menu-item>
       </el-menu>
     </el-header>

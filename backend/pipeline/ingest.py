@@ -34,6 +34,9 @@ from pipeline.cleaning.normalize import (  # noqa: E402
 DEFAULT_FX = {
     "CNY": 1.0, "USD": 7.2, "EUR": 7.8, "GBP": 9.1,
     "SGD": 5.4, "AED": 1.96, "INR": 0.086, "HKD": 0.92,
+    "THB": 0.2, "IDR": 0.00045, "MYR": 1.55, "JPY": 0.048, "KRW": 0.0052,
+    "PHP": 0.125, "VND": 0.00028, "CHF": 8.2, "MXN": 0.42, "BRL": 1.32,
+    "EGP": 0.148, "TRY": 0.21, "TND": 2.3,
 }
 
 

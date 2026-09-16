@@ -78,6 +78,12 @@ class SalaryRecord(Base):
     education_level: Mapped[str | None] = mapped_column(Text)
     dedup_hash: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text)
+    # 聚合源扩展：jobui 等聚合页的样本量与分段明细
+    sample_count: Mapped[int | None] = mapped_column(Integer)
+    extra_json: Mapped[str | None] = mapped_column(Text)  # segment_wages / city_district_wages / distribution
+    # 级别维度：市场级别（专员/高级/主管/经理/总监/VP）+ DIDA 等效级（L1-L6，对标用）
+    level: Mapped[str | None] = mapped_column(Text, index=True)
+    dida_grade: Mapped[str | None] = mapped_column(Text)  # O1-O4 / P0-P8 / M4-M5
     created_at: Mapped[str] = mapped_column(Text, default=_now)
 
 

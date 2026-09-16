@@ -92,6 +92,38 @@ _CITY_MAP = {
     "新加坡": ["新加坡", "Singapore"],
     "迪拜": ["迪拜", "Dubai"],
     "伦敦": ["伦敦", "London"],
+    # DIDA 海外驻地（roster 实际工作地点）
+    "雅加达": ["雅加达", "Jakarta", "印度尼西亚", "Indonesia"],
+    "曼谷": ["曼谷", "泰国", "Bangkok", "Thailand"],
+    "吉隆坡": ["吉隆坡", "马来西亚", "Kuala Lumpur", "Malaysia"],
+    "东京": ["东京", "日本", "Tokyo", "Japan"],
+    "首尔": ["首尔", "韩国", "Seoul", "Korea"],
+    "马尼拉": ["马尼拉", "菲律宾", "Manila", "Philippines"],
+    "胡志明市": ["胡志明", "越南", "Ho Chi Minh", "Vietnam"],
+    "马德里": ["马德里", "西班牙", "Madrid", "Spain"],
+    "巴黎": ["巴黎", "法国", "Paris", "France"],
+    "柏林": ["柏林", "德国", "Berlin", "Germany"],
+    "罗马": ["罗马", "意大利", "Rome", "Italy"],
+    "里斯本": ["里斯本", "葡萄牙", "Lisbon", "Portugal"],
+    "雅典": ["雅典", "希腊", "Athens", "Greece"],
+    "维也纳": ["维也纳", "奥地利", "Vienna", "Austria"],
+    "苏黎世": ["苏黎世", "瑞士", "Zurich", "Switzerland"],
+    "开罗": ["开罗", "埃及", "Cairo", "Egypt"],
+    "突尼斯": ["突尼斯", "Tunis", "Tunisia"],
+    "伊斯坦布尔": ["伊斯坦布尔", "土耳其", "Istanbul", "Turkey"],
+    "墨西哥城": ["墨西哥", "Mexico City", "Mexico"],
+    "圣保罗": ["圣保罗", "巴西", "Sao Paulo", "Brazil"],
+    "纽约": ["纽约", "美国", "New York", "USA", "United States"],
+}
+
+# 国家码：城市 → ISO 国家（用于 fx 折算与国家维度）
+_CITY_COUNTRY = {
+    "香港": "HK", "新加坡": "SG", "迪拜": "AE", "伦敦": "GB",
+    "雅加达": "ID", "曼谷": "TH", "吉隆坡": "MY", "东京": "JP", "首尔": "KR",
+    "马尼拉": "PH", "胡志明市": "VN", "马德里": "ES", "巴黎": "FR", "柏林": "DE",
+    "罗马": "IT", "里斯本": "PT", "雅典": "GR", "维也纳": "AT", "苏黎世": "CH",
+    "开罗": "EG", "突尼斯": "TN", "伊斯坦布尔": "TR", "墨西哥城": "MX",
+    "圣保罗": "BR", "纽约": "US",
 }
 
 
@@ -103,16 +135,7 @@ def normalize_city(raw: str | None) -> tuple[str, str]:
     for std, variants in _CITY_MAP.items():
         for v in variants:
             if v.lower() in t.lower():
-                country = "CN"
-                if std in ("新加坡",):
-                    country = "SG"
-                elif std in ("迪拜",):
-                    country = "AE"
-                elif std in ("伦敦",):
-                    country = "GB"
-                elif std == "香港":
-                    country = "CN"
-                return (std, country)
+                return (std, _CITY_COUNTRY.get(std, "CN"))
     # 未识别：含中文视为国内城市，保留原文
     if re.search(r"[一-鿿]", t):
         return (re.sub(r"(市|区|县)$", "", t), "CN")
@@ -199,14 +222,38 @@ def classify_job_family(position: str) -> str | None:
 
 _CURRENCY_SIGNS = [
     (re.compile(r"[¥￥]|人民币|RMB|CNY", re.I), "CNY"),
-    (re.compile(r"[$]|USD|美元|dollar", re.I), "USD"),
+    (re.compile(r"S\$|SGD|新币|新加坡元", re.I), "SGD"),
+    (re.compile(r"HKD|港币|港元|HK\$", re.I), "HKD"),
+    (re.compile(r"AED|迪拉姆", re.I), "AED"),
+    (re.compile(r"THB|泰铢|บาท", re.I), "THB"),
+    (re.compile(r"IDR|印尼盾|Rp\b", re.I), "IDR"),
+    (re.compile(r"MYR|林吉特|RM\b", re.I), "MYR"),
+    (re.compile(r"JPY|日元|円|¥JP", re.I), "JPY"),
+    (re.compile(r"KRW|韩元|원", re.I), "KRW"),
+    (re.compile(r"PHP|比索", re.I), "PHP"),
+    (re.compile(r"VND|越南盾", re.I), "VND"),
+    (re.compile(r"₹|INR|卢比", re.I), "INR"),
     (re.compile(r"[€]|EUR|欧元", re.I), "EUR"),
     (re.compile(r"[£]|GBP|英镑", re.I), "GBP"),
-    (re.compile(r"S\$|SGD|新币|新加坡元", re.I), "SGD"),
-    (re.compile(r"AED|迪拉姆", re.I), "AED"),
-    (re.compile(r"INR|卢比|₹", re.I), "INR"),
-    (re.compile(r"HKD|港币|港元|HK\$", re.I), "HKD"),
+    (re.compile(r"CHF|瑞士法郎", re.I), "CHF"),
+    (re.compile(r"MXN|墨西哥比索", re.I), "MXN"),
+    (re.compile(r"BRL|雷亚尔", re.I), "BRL"),
+    (re.compile(r"EGP|埃及镑", re.I), "EGP"),
+    (re.compile(r"TRY|里拉", re.I), "TRY"),
+    (re.compile(r"TND|突尼斯第纳尔", re.I), "TND"),
+    (re.compile(r"[$]|USD|美元|dollar", re.I), "USD"),
 ]
+
+
+# 国家 → 默认币种（detect_currency 的兜底映射，覆盖 DIDA 海外驻地）
+_COUNTRY_CURRENCY = {
+    "CN": "CNY", "HK": "HKD", "SG": "SGD", "AE": "AED", "GB": "GBP",
+    "ID": "IDR", "TH": "THB", "MY": "MYR", "JP": "JPY", "KR": "KRW",
+    "PH": "PHP", "VN": "VND", "IN": "INR", "ES": "EUR", "FR": "EUR",
+    "DE": "EUR", "IT": "EUR", "PT": "EUR", "GR": "EUR", "AT": "EUR",
+    "CY": "EUR", "CH": "CHF", "EG": "EGP", "TN": "TND", "TR": "TRY",
+    "MX": "MXN", "BR": "BRL", "US": "USD",
+}
 
 
 def detect_currency(raw: str | None, country: str = "CN") -> str:
@@ -214,8 +261,7 @@ def detect_currency(raw: str | None, country: str = "CN") -> str:
         for pat, cur in _CURRENCY_SIGNS:
             if pat.search(raw):
                 return cur
-    fallback = {"CN": "CNY", "SG": "SGD", "AE": "AED", "GB": "GBP"}.get(country, "USD")
-    return fallback
+    return _COUNTRY_CURRENCY.get(country, "USD")
 
 
 def dedup_hash(company_name: str, position_norm: str, city: str,
