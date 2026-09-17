@@ -54,6 +54,21 @@ JOBUI_NAME_MAP = {
     "人事专员": "人事专员", "资金专员": "资金专员", "海外渠道运营": "渠道运营",
 }
 
+# 高级/主管档（补齐市场级别覆盖）：jobui 有独立聚合页的资深/主管岗位
+# 2026-09-16 实测：gaojichanpinjingli 等组合 slug 重定向索引页，以下 slug 为有效页
+SENIOR_POSITIONS = [
+    "高级运营", "运营主管", "高级客服", "销售主管", "客服主管",
+    "财务主管", "人事主管", "高级法务", "高级行政", "高级业务",
+    "资深运营", "资深产品经理", "高级开发工程师", "高级测试工程师",
+]
+SENIOR_SLUGS = {
+    "高级运营": "gaojiyunying", "运营主管": "yunyingzhuguan", "高级客服": "gaojikefu",
+    "销售主管": "xiaoshouzhuguan", "客服主管": "kefuzhuguan", "财务主管": "caiwuzhuguan",
+    "人事主管": "renshizhuguan", "高级法务": "gaojifawu", "高级行政": "gaojixingzheng",
+    "高级业务": "gaojiyewu", "资深运营": "zishenyunying", "资深产品经理": "zishenchanpinjingli",
+    "高级开发工程师": "gaojikaifagongchengshi", "高级测试工程师": "gaojiceshigongchengshi",
+}
+
 # DIDA 工作地点 → jobui 城市slug
 CITY_SLUGS = {
     "深圳": "shenzhen", "长沙": "changsha", "上海": "shanghai", "重庆": "chongqing",
@@ -69,7 +84,7 @@ def slugify_pinyin(name: str) -> str | None:
         "客服专员": "kefuzhuanyuan", "订单运营专员": "dingdanyunyingzhuanyuan",
         "运营专员": "yunyingzhuanyuan", "业务经理": "yewujingli",
         "区域销售经理": "quyuxiaoshoujingli", "大客户经理": "dakehujingli",
-        "后端开发工程师": "houduankaifagongchengshi", "前端开发工程师": "qianduankaifagongchengshi",
+        "后端开发工程师": "houduankaifagongchengshi", "前端工程师": "qianduankaifagongchengshi",
         "测试工程师": "ceshigongchengshi", "数据开发工程师": "shujukaifagongchengshi",
         "大数据开发工程师": "dashujukaifagongchengshi", "运维工程师": "yunweigongchengshi",
         "产品经理": "chanpinjingli", "UI设计师": "uishejishi", "算法工程师": "suanfagongchengshi",
@@ -79,6 +94,7 @@ def slugify_pinyin(name: str) -> str | None:
         "渠道运营": "qudaoyunying", "数据录入员": "shujuluruyuan",
         "机票预订员": "jipiaoyudingyuan",
     }
+    known.update(SENIOR_SLUGS)
     return known.get(name)
 
 
@@ -156,20 +172,25 @@ def collect_one(db, run_id: int, family_map: dict, position_dida: str, city_cn: 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", help="指定 城市 岗位... 过滤")
+    ap.add_argument("--senior", action="store_true", help="追加高级/主管档岗位")
     args = ap.parse_args()
 
     init_db()
     db = SessionLocal()
     family_map = {jf.code: jf.id for jf in db.query(JobFamily).all()}
 
+    positions_all = DIDA_POSITIONS + (SENIOR_POSITIONS if args.senior else [])
     run = CollectRun(source_name="jobui_batch", status="running",
-                     params_json=json.dumps({"positions": len(DIDA_POSITIONS),
-                                             "cities": list(CITY_SLUGS)}, ensure_ascii=False))
+                     params_json=json.dumps({"positions": len(positions_all),
+                                             "cities": list(CITY_SLUGS),
+                                             "senior": args.senior}, ensure_ascii=False))
     db.add(run)
     db.flush()
 
     cities = [c for c in CITY_SLUGS if not args.only or c in args.only]
-    positions = [p for p in DIDA_POSITIONS if not args.only or p in args.only or JOBUI_NAME_MAP.get(p, p) in args.only]
+    pos_only = [a for a in (args.only or []) if a not in CITY_SLUGS]
+    positions = [p for p in positions_all
+                 if not pos_only or p in pos_only or JOBUI_NAME_MAP.get(p, p) in pos_only]
 
     added = skipped = miss = 0
     for city in cities:

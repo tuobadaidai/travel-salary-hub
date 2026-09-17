@@ -188,11 +188,59 @@ def parse_jobui_salary_page(html: str, url: str) -> SalaryRow | None:
     return row
 
 
-# ---------- 源发现：岗位 → jobui URL 模式 ----------
+def parse_jobui_company_subpage(html: str, url: str) -> SalaryRow | None:
+    """解析 jobui 公司×岗位薪酬子页 /company/{id}/salary/j/{slug}/（2026-09 实测格式）。
 
-_JOBUI_SLUG = {
-    # 直接拼 jobui 的拼音 slug；不确定的用搜索发现兜底
-}
+    核心句：同程旅行 产品经理 薪酬区间: 8K - 50K，其中85.5%的岗位拿￥20-50K
+    样本句：取自近一年 131 个相关岗位
+    地区表：苏州\x00￥25.1K\x0043.5%(57)
+    """
+    m = re.search(r"jobui\.com/company/(\d+)/salary/j/([a-z]+)/", url)
+    if not m:
+        return None
+    text = _strip_html(html)
+    flat = re.sub(r"[\n\r\t ]+", "\x00", text)
+
+    row = SalaryRow(source="jobui_company", source_url=url)
+
+    m = re.search(r"([一-龥A-Za-z0-9·]{2,25})\s*薪酬区间[：:]\s*￥?(\d+\.?\d*)K?\s*-\s*￥?(\d+\.?\d*)K", text)
+    if not m:
+        return None
+    row.position = m.group(1).strip()
+    row.monthly_low = float(m.group(2)) * 1000
+    row.monthly_high = float(m.group(3)) * 1000
+    row.annual_low = row.monthly_low * 12
+    row.annual_high = row.monthly_high * 12
+    row.annual_avg = (row.annual_low + row.annual_high) / 2
+
+    m2 = re.search(r"取自近一年\s*(\d+)\s*个相关岗位", text)
+    if m2:
+        row.sample_count = int(m2.group(1))
+
+    # 主要招聘地区：苏州\x00￥25.1K\x0043.5%(57)
+    locs = re.findall(
+        r"([一-龥]{2,8})\x00￥(\d+\.?\d*)K\x00(\d+\.?\d*)%(?:\((\d+)\))?", flat)
+    if locs:
+        row.extra["company_city_wages"] = [
+            {"city": c, "monthly_k": float(k), "pct": float(p), "jobs": int(j) if j else None}
+            for c, k, p, j in locs[:15]
+        ]
+        # 页面若未标城市，取占比最高的招聘地区作为该行 city
+        top = max(row.extra["company_city_wages"], key=lambda x: x["pct"])
+        row.city = top["city"]
+
+    m3 = re.search(r"招聘地区[：:]\s*主要分布在([一-龥A-Za-z，,、 ]{2,60})", text)
+    if m3:
+        row.extra["main_cities"] = [
+            c for c in re.split(r"[，,、]", m3.group(1)) if c.strip()
+        ][:6]
+
+    if row.annual_avg is None:
+        return None
+    return row
+
+
+# ---------- 源发现：岗位 → jobui URL 模式 ----------
 
 
 def jobui_salary_url(city_en: str, position: str) -> str:

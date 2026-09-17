@@ -31,6 +31,12 @@ cd backend && uvicorn app.main:app --port 8300
 # 国内市场：DIDA 核心岗位 × 城市批量采集（jobui 聚合页，4s 限速）
 python3 -m backend.pipeline.run_batch
 
+# 高级/主管档：追加资深岗位采集（gaojiyunying/yunyingzhuguan 等独立聚合页）
+python3 -m backend.pipeline.run_batch --senior
+
+# 竞争公司维度：jobui 公司×岗位薪酬子页（携程/美团/同程/众信/马蜂窝/阿里，ID 已验证）
+python3 -m backend.pipeline.run_companies
+
 # 海外市场：SearxNG 摘要抽取（Glassdoor/招聘站摘要级，搜索关键词可调）
 python3 -m backend.pipeline.run_overseas
 
@@ -42,6 +48,11 @@ python3 -m backend.pipeline.run_collector reports_csv data/seed/reports_seed.csv
 ```
 
 通道：SearxNG(3004) 搜索发现 → scrapling(chrome指纹) 主抓 → Crawl4AI(11235) 备用；原始页面 JSONL 落盘 `data/raw/` 审计。
+
+注意事项：
+- jobui 城市×岗位组合 slug（如 `shenzhen-gaojichanpinjingli`）会重定向索引页，高级/主管档须用独立聚合 slug（`gaojiyunying`/`yunyingzhuguan` 等，见 run_batch.py SENIOR_SLUGS）
+- jobui 公司子页 slug 是截断拼音（bp/fa/oc），只能从公司薪酬主页枚举链接，不能猜测；解析出的岗位名要过滤碎片（run_companies.py NOISE_POSITION_RE）
+- jobui 公司 ID 变动大，site: 搜索噪声多，须用 `/cmp?keyword=` 站内搜索发现 + 页面标题验证
 
 ## 数据口径
 
