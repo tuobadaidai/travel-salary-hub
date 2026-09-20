@@ -33,9 +33,13 @@ if dist.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
-        """SPA 深链接回退：/companies 等前端路由返回 index.html。"""
+        """SPA 深链接回退：/companies 等前端路由返回 index.html。
+
+        路径穿越防护：resolve 后必须仍在 dist 目录内（曾可 GET //data/salary.db 下载数据库）。
+        """
         from fastapi.responses import FileResponse
-        candidate = dist / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
+        if full_path:
+            candidate = (dist / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(dist.resolve()):
+                return FileResponse(candidate)
         return FileResponse(dist / "index.html")

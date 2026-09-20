@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { ElMessage } from "element-plus"
 import * as echarts from "echarts"
 import {
@@ -27,10 +27,33 @@ const drillRows = ref<DrillRecord[]>([])
 const familyName = computed(
   () => (id: string) => meta.value?.job_families.find(f => String(f.id) === id)?.name ?? id,
 )
+const familyIdByName = computed(
+  () => (name: string) => meta.value?.job_families.find(f => f.name === name)?.id,
+)
+
+// ECharts 实例与 resize 监听统一登记，反复筛选/切换维度时先销毁，防泄漏
+const charts: echarts.ECharts[] = []
+const resizeHandlers: (() => void)[] = []
+
+function mountChart(el: HTMLDivElement): echarts.ECharts {
+  const chart = echarts.init(el)
+  charts.push(chart)
+  const onResize = () => chart.resize()
+  window.addEventListener("resize", onResize)
+  resizeHandlers.push(() => window.removeEventListener("resize", onResize))
+  return chart
+}
+
+function disposeCharts() {
+  resizeHandlers.forEach(fn => fn())
+  resizeHandlers.length = 0
+  charts.forEach(c => c.dispose())
+  charts.length = 0
+}
 
 function renderBox(el: HTMLDivElement | undefined, data: QuantileItem[], labelFn: (k: string) => string) {
   if (!el || !data.length) return
-  const chart = echarts.init(el)
+  const chart = mountChart(el)
   const rows = [...data].reverse()
   const categories = rows.map(d => labelFn(d.group_key))
   chart.setOption({
@@ -61,15 +84,13 @@ function renderBox(el: HTMLDivElement | undefined, data: QuantileItem[], labelFn
         data: rows.map(d => [d.p50, d.group_key]) },
     ],
   })
-  const onResize = () => chart.resize()
-  window.addEventListener("resize", onResize)
 }
 
 function renderHeat() {
   const el = heatChartEl.value
   const h = heat.value
   if (!el || !h || !h.row_keys.length) return
-  const chart = echarts.init(el)
+  const chart = mountChart(el)
   const data: [number, number, number, number, boolean][] = []
   h.grid.forEach((row, ri) =>
     row.forEach((cell, ci) => {
@@ -101,26 +122,33 @@ function renderHeat() {
     if (!d) return
     void openDrill(h.row_keys[d[1]], h.col_keys[d[0]])
   })
-  const onResize = () => chart.resize()
-  window.addEventListener("resize", onResize)
 }
 
 async function openDrill(rowKey: string, colKey: string) {
   try {
+    const params: Record<string, unknown> = { limit: 80 }
+    // 穿透条件必须与格子维度一致，否则抽屉显示无关记录
+    if (colDim.value === "city") params.city = colKey
+    else if (colDim.value === "country") params.city = undefined
+    else if (colDim.value === "position") params.position = colKey
+    else if (colDim.value === "company_type") params.city = undefined
     if (rowDim.value === "job_family") {
-      // 记录接口按 position 过滤；岗位族退化为城市明细
+      const fid = familyIdByName.value(rowKey)
+      if (fid) params.job_family_id = fid
       drillTitle.value = `${rowKey} × ${colKey} 明细`
-      drillRows.value = await api.records({ city: colKey, limit: 80 })
     } else if (rowDim.value === "level") {
+      params.level = rowKey
       drillTitle.value = `${rowKey} × ${colKey} 明细`
-      drillRows.value = await api.records({ level: rowKey, city: colKey, limit: 80 })
     } else if (rowDim.value === "position") {
+      params.position = rowKey
       drillTitle.value = `${rowKey} × ${colKey} 明细`
-      drillRows.value = await api.records({ position: rowKey, city: colKey, limit: 80 })
+    } else if (rowDim.value === "company_type") {
+      params.company_type = rowKey
+      drillTitle.value = `${rowKey} × ${colKey} 明细`
     } else {
       drillTitle.value = `${rowKey} × ${colKey} 明细`
-      drillRows.value = await api.records({ city: colKey, limit: 80 })
     }
+    drillRows.value = await api.records(params)
     drawer.value = true
   } catch (e) {
     ElMessage.error("穿透加载失败: " + (e as Error).message)
@@ -139,6 +167,7 @@ async function load() {
       api.quantiles({ ...params, group_by: "job_family" }),
       api.quantiles({ ...params, group_by: "company_type" }),
     ])
+    disposeCharts()
     renderBox(familyChartEl.value, f, id => familyName.value(id))
     renderBox(typeChartEl.value, t, k => k)
   } catch (e) {
@@ -150,6 +179,7 @@ onMounted(async () => {
   meta.value = await api.meta()
   await Promise.all([load(), loadHeat()])
 })
+onBeforeUnmount(disposeCharts)
 watch(() => [store.cities, store.country, store.companyType, store.jobFamilyId, store.dateRange], load, { deep: true })
 watch([rowDim, colDim], loadHeat)
 </script>

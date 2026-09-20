@@ -9,6 +9,7 @@
         <el-menu-item index="/">总览</el-menu-item>
         <el-menu-item index="/benchmark">岗位对标</el-menu-item>
         <el-menu-item index="/companies">公司名单</el-menu-item>
+        <el-menu-item index="/data">数据维护</el-menu-item>
       </el-menu>
     </el-header>
     <el-main>

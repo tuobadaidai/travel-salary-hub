@@ -53,70 +53,184 @@ OVERSEAS_POSITIONS = {
 RATE_LIMIT_S = 4.0
 
 # 摘要抽数字模式：货币符号/代码 + 数值 + 周期
+# kind 由周期词直接判定，不再用"pattern 里含 month"推断
 _PATTERNS = [
     # "SGD 6,000 - SGD 8,000 per month" / "THB60000 - THB100000 per month"
-    re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s?(?:-|–|to)\s?(?:[A-Z]{3})?\s?([\d,]{3,10})\s*(?:per month|/month|a month|monthly)", re.I),
+    (re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s?(?:-|–|to)\s?(?:[A-Z]{3})?\s?([\d,]{3,10})\s*(per month|/month|a month|monthly)", re.I), "monthly"),
+    (re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s?(?:-|–|to)\s?(?:[A-Z]{3})?\s?([\d,]{3,10})\s*(per year|/year|per annum|a year|annual|yearly)", re.I), "annual"),
     # "SGD 6,000 per month"
-    re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s*(?:per month|/month|a month|monthly)", re.I),
-    re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s*(?:per year|/year|per annum|a year|annual|yearly)", re.I),
+    (re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s*(per month|/month|a month|monthly)", re.I), "monthly"),
+    (re.compile(r"([A-Z]{3})\s?([\d,]{3,10})\s*(per year|/year|per annum|a year|annual|yearly)", re.I), "annual"),
     # "S$3,400 per month" / "HK$20,000 monthly"（Glassdoor 常用本地符号）
-    re.compile(r"(S\$|HK\$|RM|Rp|₹|€|£)\s?([\d,]{3,10})\s*(?:per month|/month|a month|monthly)", re.I),
-    # "$3,400 per month"（语境里带城市名时 $ 按本币处理，由上下文币种映射）
-    re.compile(r"\$\s?([\d,]{3,10})\s*(?:per month|/month|a month|monthly)"),
-    re.compile(r"\$\s?([\d,]{3,10})\s*(?:per year|/year|per annum|a year|annual)", re.I),
+    (re.compile(r"(S\$|HK\$|RM|Rp|₹|€|£|A\$|C\$|US\$)\s?([\d,]{3,10})\s*(?:-|–)?\s?(?:[\d,]{3,10})?\s*(per month|/month|a month|monthly)", re.I), "monthly"),
+    (re.compile(r"(S\$|HK\$|RM|Rp|₹|€|£|A\$|C\$|US\$)\s?([\d,]{3,10})\s*(?:-|–)?\s?(?:[\d,]{3,10})?\s*(per year|/year|per annum|a year|annual|yearly)", re.I), "annual"),
+    # "$3,400 per month"（裸 $：Glassdoor 用本地符号渲染，按城市映射本币；
+    # 负向后顾排除 A$/C$/S$/HK$ 等带前缀符号）
+    (re.compile(r"(?<![A-Za-z])\$\s?([\d,]{3,10})\s*(?:-|–)?\s?(?:[\d,]{3,10})?\s*(per month|/month|a month|monthly)", re.I), "monthly"),
+    (re.compile(r"(?<![A-Za-z])\$\s?([\d,]{3,10})\s*(?:-|–)?\s?(?:[\d,]{3,10})?\s*(per year|/year|per annum|a year|annual|yearly)", re.I), "annual"),
 ]
 
 # 符号 → ISO 币种
 _SYMBOL_CURRENCY = {
     "S$": "SGD", "HK$": "HKD", "RM": "MYR", "Rp": "IDR", "₹": "INR",
-    "€": "EUR", "£": "GBP",
+    "€": "EUR", "£": "GBP", "A$": "AUD", "C$": "CAD", "US$": "USD",
 }
 
+# 城市英文名 → 裸 $ 的本币映射与异币种黑名单（美国/加拿大站点的 $ 数据不适用于本地市场）
+_CITY_DOLLAR_CURRENCY = {
+    "新加坡": "SGD", "香港": "HKD",
+}
+# 这些城市的 snippet 出现 USD/北美语境时直接丢弃（indeed.com/glassdoor 美国站污染）
+_CITY_FOREIGN_EXCLUDE = {
+    "曼谷": ("USD", "CAD"), "吉隆坡": ("USD", "CAD"), "雅加达": ("USD", "CAD"),
+    "东京": ("USD", "CAD"), "首尔": ("USD", "CAD"), "马尼拉": ("USD", "CAD"),
+    "胡志明市": ("USD", "CAD"), "马德里": ("USD", "CAD", "MXN"), "迪拜": ("INR",),
+    "伦敦": ("USD", "CAD"), "香港": ("USD", "CAD"), "新加坡": ("USD", "CAD"),
+}
+# 年薪合理下限（等值 CNY）：低于此值视为月薪被误标为年薪或噪声
+_ANNUAL_CNY_FLOOR = 50000
+# 月薪合理上限（等值 CNY）：高于此值视为年薪被误标为月薪
+_MONTHLY_CNY_CEILING = 200000
 
-def extract_amounts(text: str, city_en: str = "") -> list[dict]:
-    """从摘要文本抽取 (币种, 月/年薪低, 高)。"""
+
+def _detect_geo_context(text: str) -> str:
+    """从 snippet 上下文检测实际地区（美国/加拿大/澳洲等），用于排除错配数据。"""
+    t = text.lower()
+    for kw in ("united states", " u.s.", "us$", "woburn", "boston", "new york",
+               "san francisco", "chicago", "atlanta", "texas", "california",
+               "canada", "toronto", "vancouver", "burnaby", "australia", "sydney",
+               "melbourne", "london uk"):
+        if kw in t:
+            if "australia" in kw or "sydney" in kw or "melbourne" in kw:
+                return "AU"
+            if "canada" in kw or "toronto" in kw or "vancouver" in kw or "burnaby" in kw:
+                return "CA"
+            if "london" in kw:
+                return "UK"
+            return "US"
+    return ""
+
+
+def extract_amounts(text: str, city_cn: str = "", city_en: str = "") -> list[dict]:
+    """从摘要文本抽取 (币种, 月/年薪低, 高, kind)。"""
     out = []
-    for pat in _PATTERNS:
+    claimed: list[tuple[int, int]] = []  # 已命中的文本区间，避免同一金额被多模式重复抽取
+    for pat, kind in _PATTERNS:
         for m in pat.finditer(text):
-            groups = m.groups()
-            if len(groups) == 1:
-                # 纯 $ 模式：只有一个金额捕获组
-                sym, lo_s, hi_s = "$", groups[0], None
-            elif len(groups) >= 3 and groups[2] is not None:
-                sym, lo_s, hi_s = groups[0], groups[1], groups[2]
-            else:
+            if any(s <= m.start() < e for s, e in claimed):
+                continue
+            groups = m.groups()[:-1]  # 末组是周期词，不参与金额解析
+            if pat.pattern.startswith("(?<![A-Za-z])\\$"):
+                sym, lo_s = "$", groups[0]
+                hi_s = groups[1] if len(groups) >= 2 and groups[1] else None
+            elif len(groups) == 2:
                 sym, lo_s = groups[0], groups[1]
-                hi_s = groups[2] if len(groups) >= 3 else None
+                hi_s = None
+            else:
+                sym = groups[0]
+                lo_s = groups[1]
+                hi_s = groups[2] if len(groups) >= 3 and groups[2] else None
             lo = float(lo_s.replace(",", ""))
             hi = float(hi_s.replace(",", "")) if hi_s else None
             if lo < 100:  # 时薪类噪声
                 continue
             sym = str(sym).strip()
-            if re.fullmatch(r"[A-Za-z$]{1,3}", sym) and not sym.upper().startswith(("S$", "HK")):
-                sym_u = sym.upper()
-                cur = sym_u if re.fullmatch(r"[A-Z]{3}", sym_u) else _SYMBOL_CURRENCY.get(sym, "USD")
+            if sym in _SYMBOL_CURRENCY:
+                cur = _SYMBOL_CURRENCY[sym]
+            elif re.fullmatch(r"[A-Z]{3}", sym.upper()):
+                cur = sym.upper()
             else:
-                cur = _SYMBOL_CURRENCY.get(sym, "USD")
-            # 纯 $ + 城市语境 → 本币
-            if cur == "USD" and sym == "$":
-                if "singapore" in city_en.lower():
-                    cur = "SGD"
-                elif "hong kong" in city_en.lower():
-                    cur = "HKD"
-            # HK$ 模式第二个数字重复报了一次（低-高区间两个 match），去重
-            if out and out[-1]["currency"] == cur and out[-1]["low"] == lo:
-                out[-1]["high"] = hi or out[-1]["low"]
+                cur = "USD"  # 裸 $
+            # 裸 $ → 按城市映射本币（仅 新加坡/香港 语境可信）
+            if cur == "USD" and sym == "$" and city_cn in _CITY_DOLLAR_CURRENCY:
+                cur = _CITY_DOLLAR_CURRENCY[city_cn]
+            # 城市语境币种黑名单：美国/加拿大/澳洲站点数据混入（snippet 含
+            # Woburn/Boston/US 等词），这是曼谷 USD 6万/月污染的根源
+            geo = _detect_geo_context(text)
+            if geo and geo != _CITY_COUNTRY_CODE.get(city_cn, ""):
                 continue
-            kind = "monthly" if "month" in pat.pattern.lower() else "annual"
+            if cur in _CITY_FOREIGN_EXCLUDE.get(city_cn, ()) and geo in ("US", "CA", "AU"):
+                continue
+            # A$/C$/US$ 等异币种在本地城市无意义，直接丢
+            if cur in ("AUD", "CAD", "MXN") and city_cn not in ("悉尼", "墨尔本", "多伦多", "墨西哥城"):
+                continue
+            # 非本币数据必须明示目标城市（"in Bangkok"）才可信：
+            # Thomas & Betts / Barnstable 这类无地名词的美国数据靠这条拦住
+            native = _CITY_NATIVE_CURRENCIES.get(city_cn, set())
+            if cur not in native and city_en.lower() not in text.lower():
+                continue
+            claimed.append((m.start(), m.end()))
             out.append({"currency": cur, "low": lo, "high": hi, "kind": kind,
+                        "geo": geo,
                         "snippet": text[max(0, m.start() - 60):m.end() + 30]})
     return out
+
+
+# 城市 → 国家码（与 _CITY_FOREIGN_EXCLUDE 配套）
+_CITY_COUNTRY_CODE = {
+    "香港": "HK", "新加坡": "SG", "曼谷": "TH", "吉隆坡": "MY", "雅加达": "ID",
+    "东京": "JP", "首尔": "KR", "马尼拉": "PH", "胡志明市": "VN", "马德里": "ES",
+    "迪拜": "AE", "伦敦": "GB",
+}
+
+# 城市本币白名单：snippet 数据只有本币（或 USD/EUR/GBP 等国际发布口径）才可信。
+# 这是单源噪声（曼谷 INR、胡志明 PHP 串城市）的最后一道闸
+_CITY_NATIVE_CURRENCIES = {
+    "香港": {"HKD"}, "新加坡": {"SGD"}, "曼谷": {"THB"}, "吉隆坡": {"MYR"},
+    "雅加达": {"IDR"}, "东京": {"JPY"}, "首尔": {"KRW"}, "马尼拉": {"PHP"},
+    "胡志明市": {"VND"}, "马德里": {"EUR"}, "迪拜": {"AED"}, "伦敦": {"GBP"},
+}
+# 这些国际通用币种在任何城市都可接受（招聘顾问/全球报告常用）
+_INTERNATIONAL_CURRENCIES = {"USD", "EUR", "GBP"}
+
+
+def aggregate_amounts(candidates: list[dict], city_cn: str) -> dict | None:
+    """口径归一后按 币种×周期 分桶，桶间互不混合；取最大桶做中位聚合。
+
+    每条 candidate 先做口径合理性校验（年薪折 CNY 过低 / 月薪折 CNY 过高
+    视为口径误标，转为另一口径），再进入分桶。
+    """
+    checked = []
+    for c in candidates:
+        lo, hi = c["low"], c["high"] or c["low"]
+        # 城市本币白名单：非本币且非国际通用币种的记录直接丢弃
+        # （INR 数据出现在曼谷、PHP 数据出现在东京这类跨城噪声）
+        native = _CITY_NATIVE_CURRENCIES.get(city_cn)
+        if native and c["currency"] not in native | _INTERNATIONAL_CURRENCIES:
+            continue
+        fx = DEFAULT_FX.get(c["currency"], 7.0)
+        if c["kind"] == "annual":
+            # 年薪 < 5万CNY 多为月薪误标或小币种噪声
+            if lo * fx < _ANNUAL_CNY_FLOOR:
+                c = {**c, "kind": "monthly", "low": lo, "high": hi}
+        else:
+            # 月薪 > 20万CNY 多为年薪误标
+            if lo * fx > _MONTHLY_CNY_CEILING:
+                c = {**c, "kind": "annual", "low": lo, "high": hi}
+        checked.append(c)
+    if not checked:
+        return None
+
+    # 币种 × 周期 分桶：不同币种/口径绝不混算
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for c in checked:
+        buckets.setdefault((c["currency"], c["kind"]), []).append(c)
+    key, bucket = max(buckets.items(), key=lambda kv: len(kv[1]))
+    cur, kind = key
+
+    lows = sorted(c["low"] for c in bucket)
+    his = sorted((c["high"] or c["low"]) for c in bucket)
+    n = len(lows)
+    low_med = lows[n // 2] if n % 2 else (lows[n // 2 - 1] + lows[n // 2]) / 2
+    hi_med = his[n // 2] if n % 2 else (his[n // 2 - 1] + his[n // 2]) / 2
+    return {"currency": cur, "kind": kind, "low": low_med, "high": hi_med,
+            "n": n, "mixed_dropped": len(checked) - n}
 
 
 def collect_city_position(db, run_id: int, family_map: dict, city_cn: str, city_en: str,
                           pos_cn: str, pos_en: str) -> tuple[int, int]:
     """搜一岗一城，抽数字落库。返回 (新增, 跳过)。"""
-    query = f'"{pos_en}" salary {city_en} average per month'
+    query = f'"{pos_en}" salary {city_en} average'
     try:
         results = searx_search(query, pages=1)
     except Exception as e:
@@ -126,7 +240,7 @@ def collect_city_position(db, run_id: int, family_map: dict, city_cn: str, city_
     candidates = []
     for r in results:
         content = (r.get("content") or "") + " " + (r.get("title") or "")
-        for amt in extract_amounts(content, city_en):
+        for amt in extract_amounts(content, city_cn, city_en):
             amt["url"] = r.get("url", "")
             candidates.append(amt)
     raw_dump("overseas_snippet", f"searx::{query}", {
@@ -136,16 +250,16 @@ def collect_city_position(db, run_id: int, family_map: dict, city_cn: str, city_
         print(f"  MISS {city_cn}/{pos_cn}")
         return 0, 0
 
-    # 多来源数字取中位聚合：低P50/高P50 当 low/high（摘要级数据 confidence=low）
-    lows = sorted(c["low"] for c in candidates)
-    his = sorted((c["high"] or c["low"]) for c in candidates)
-    n = len(lows)
-    low_med = lows[n // 2] if n % 2 else (lows[n // 2 - 1] + lows[n // 2]) / 2
-    hi_med = his[n // 2] if n % 2 else (his[n // 2 - 1] + his[n // 2]) / 2
+    # 币种×周期分桶中位聚合（不混币种、不混月薪/年薪口径）
+    agg = aggregate_amounts(candidates, city_cn)
+    if agg is None:
+        print(f"  MISS {city_cn}/{pos_cn} (all filtered)")
+        return 0, 0
+    cur, kind = agg["currency"], agg["kind"]
+    low_med, hi_med = agg["low"], agg["high"]
+    n = agg["n"]
 
-    amt0 = candidates[0]
-    cur = amt0["currency"]
-    if amt0["kind"] == "annual":
+    if kind == "annual":
         monthly_low, monthly_high = low_med / 12, hi_med / 12
     else:
         monthly_low, monthly_high = low_med, hi_med
@@ -187,6 +301,8 @@ def collect_city_position(db, run_id: int, family_map: dict, city_cn: str, city_
         level=infer_level(pos_cn),
         sample_count=n,
         extra_json=json.dumps({"basis": "search_snippet", "confidence": "low",
+                               "basis_kind": kind,
+                               "mixed_dropped": agg["mixed_dropped"],
                                "sources": list({c["url"] for c in candidates})[:5]},
                               ensure_ascii=False),
         job_family_id=family_map.get(classify_job_family(pos_cn)),

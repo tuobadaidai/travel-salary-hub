@@ -1,5 +1,7 @@
 """分位数与趋势计算核心。SQL 只做过滤/分组，numpy 算分位数。"""
 
+import re
+
 import numpy as np
 from sqlalchemy.orm import Session
 
@@ -92,27 +94,53 @@ def benchmark_matrix(db: Session, position: str, levels: list[str] | None = None
 
     返回 {levels: [...], cities: [...], market: {level: {city: {...quantiles}}},
           dida: {level: {city: {count, p50}}}}
+
+    匹配策略：position_norm 精确匹配优先；不足时放宽为「前缀+同长近义」，
+    但绝不包含「资深/高级」差异（查「产品经理」不得混入「资深产品经理」）。
     """
     from sqlalchemy import text as _text
 
-    pos_norm = position.strip()
+    pos_norm = position.strip().lower()
     market: dict[str, dict[str, dict]] = {}
-    rows = db.query(SalaryRecord).filter(
-        SalaryRecord.position_norm.contains(pos_norm), METRIC.isnot(None))
-    if levels:
-        rows = rows.filter(SalaryRecord.level.in_(levels))
-    if cities:
-        rows = rows.filter(SalaryRecord.city.in_(cities))
-    for r in rows.all():
+
+    def _query(norm_kw: str):
+        q = db.query(SalaryRecord).filter(
+            SalaryRecord.position_norm == norm_kw, METRIC.isnot(None))
+        if levels:
+            q = q.filter(SalaryRecord.level.in_(levels))
+        if cities:
+            q = q.filter(SalaryRecord.city.in_(cities))
+        return q.all()
+
+    rows = _query(pos_norm)
+    matched_kind = "exact"
+    if not rows:
+        # 放宽：LIKE 前缀，但排除因「资深/高级/助理」前缀差异带来的混岗
+        near_re = re.compile(r"^(资深|高级|初级|助理)")
+        cand = db.query(SalaryRecord).filter(
+            SalaryRecord.position_norm.contains(pos_norm), METRIC.isnot(None))
+        if levels:
+            cand = cand.filter(SalaryRecord.level.in_(levels))
+        if cities:
+            cand = cand.filter(SalaryRecord.city.in_(cities))
+        rows = [r for r in cand.all()
+                if near_re.sub("", r.position_norm or "") == pos_norm]
+        if rows:
+            matched_kind = "near"
+    for r in rows:
         lv, ct = r.level or "未分类", r.city or "未知"
         market.setdefault(lv, {}).setdefault(ct, []).append(float(r.annual_salary_avg_base))
 
-    # DIDA 内部（dida_payroll 表，职务模糊匹配）
+    # DIDA 内部（dida_payroll 表，职务精确匹配优先、模糊兜底）
     dida: dict[str, dict[str, dict]] = {}
     try:
         prows = db.execute(_text(
             "SELECT level, location, monthly_cny FROM dida_payroll "
-            "WHERE title LIKE :kw"), {"kw": f"%{pos_norm}%"}).fetchall()
+            "WHERE title = :kw"), {"kw": pos_norm}).fetchall()
+        if not prows:
+            prows = db.execute(_text(
+                "SELECT level, location, monthly_cny FROM dida_payroll "
+                "WHERE title LIKE :kw"), {"kw": f"%{pos_norm}%"}).fetchall()
         for lv, loc, monthly in prows:
             dida.setdefault(lv or "未分类", {}).setdefault(loc or "未知", []).append(float(monthly) * 12)
     except Exception:
@@ -129,6 +157,7 @@ def benchmark_matrix(db: Session, position: str, levels: list[str] | None = None
                          for c in src.get(lv, {})})
     return {
         "position": pos_norm,
+        "match_kind": matched_kind,
         "levels": all_levels,
         "cities": all_cities,
         "market": _mk(market),
@@ -219,8 +248,9 @@ def cross_heatmap(db: Session, row_dim: str = "job_family", col_dim: str = "city
 
 
 def drill_records(db: Session, position: str | None = None, level: str | None = None,
-                  city: str | None = None, limit: int = 50) -> list[dict]:
-    """穿透：按岗位/级别/城市筛选原始记录（证据链）。"""
+                  city: str | None = None, limit: int = 50,
+                  job_family_id: int | None = None, company_type: str | None = None) -> list[dict]:
+    """穿透：按岗位/级别/城市等筛选原始记录（证据链）。"""
     q = db.query(SalaryRecord).filter(METRIC.isnot(None))
     if position:
         q = q.filter(SalaryRecord.position_norm.contains(position.strip()))
@@ -228,6 +258,10 @@ def drill_records(db: Session, position: str | None = None, level: str | None = 
         q = q.filter(SalaryRecord.level == level)
     if city:
         q = q.filter(SalaryRecord.city == city)
+    if job_family_id:
+        q = q.filter(SalaryRecord.job_family_id == job_family_id)
+    if company_type:
+        q = q.filter(SalaryRecord.company_type == company_type)
     rows = q.order_by(METRIC.desc()).limit(limit).all()
     return [
         {

@@ -100,6 +100,7 @@ class Report(Base):
     avg_salary: Mapped[float | None] = mapped_column(Float)
     employees: Mapped[int | None] = mapped_column(Integer)
     total_comp: Mapped[float | None] = mapped_column(Float)
+    revenue: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str | None] = mapped_column(Text)
     source_url: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[str] = mapped_column(Text, default="medium")

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
+import { useRoute, useRouter } from "vue-router"
 import { ElMessage } from "element-plus"
 import {
   api, type BenchmarkMatrix, type BenchCell, type PositionItem, type DrillRecord,
 } from "../api/salary"
 
 const keyword = ref("")
+const route = useRoute()
+const router = useRouter()
 const positions = ref<PositionItem[]>([])
 const selected = ref<string>("")
 const cityFilter = ref<string[]>([])
@@ -105,9 +108,14 @@ async function openDrill(lv: string, ct: string, side: "market" | "dida") {
 
 onMounted(async () => {
   positions.value = await api.positions()
+  const qp = route.query.position as string | undefined
+  if (qp && positions.value.some(p => p.position === qp)) selected.value = qp
 })
 watch(selected, loadMatrix)
 watch(cityFilter, loadMatrix, { deep: true })
+watch(selected, v => {
+  router.replace({ query: v ? { position: v } : {} })
+})
 </script>
 
 <template>

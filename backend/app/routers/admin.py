@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -31,3 +31,29 @@ def list_schedules(db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+@router.post("/import/payroll")
+async def upload_payroll(file: UploadFile):
+    """上传 DIDA 薪酬表 xlsx，匿名化导入 dida_payroll（幂等，重复行跳过）。"""
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 文件")
+    import tempfile
+    from pathlib import Path
+
+    from pipeline.import_dida_payroll import ensure_table, import_xlsx
+
+    data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(400, "文件超过 20MB 限制")
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+    try:
+        ensure_table()
+        added, skipped = import_xlsx(tmp_path)
+    except Exception as e:
+        raise HTTPException(400, f"导入失败：{e}") from e
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+    return {"added": added, "skipped": skipped, "filename": file.filename}

@@ -114,18 +114,23 @@ _CITY_SLUGS = {
 }
 
 _LEVEL_HINTS = [
-    ("总监", "总监"), ("总", "总监"),
-    ("经理", "经理"), ("高级经理", "经理"),
+    ("总监", "总监"),
+    ("高级经理", "经理"),
+    # 资深/高级前缀优先于 经理/主管：「资深产品经理」是高级岗不是经理岗
+    ("资深", "高级"), ("高级", "高级"),
+    ("经理", "经理"),
     ("主管", "主管"),
-    ("高级", "高级"), ("资深", "高级"),
     ("专员", "专员"), ("助理", "专员"), ("初级", "专员"),
 ]
 
 
 def infer_level(position: str) -> str:
-    """按岗位名推断级别：VP>总监>经理>主管>高级>专员。"""
+    """按岗位名推断级别：VP>总监>高级>经理>主管>专员。
+
+    注意英文头衔必须整词匹配：「coordinator」含子串 coo，不能裸 match。
+    """
     t = position.lower()
-    if re.search(r"vp|合伙人|chief|c[oX]o|cfo|cto|cho", t):
+    if re.search(r"\b(vp|cto|cfo|coo|cmo|ceo|cho|cxo)\b|(^|[^a-z])vp([^a-z]|$)|合伙人|chief", t):
         return "VP"
     for kw, lv in _LEVEL_HINTS:
         if kw in t:
@@ -194,6 +199,9 @@ def parse_jobui_company_subpage(html: str, url: str) -> SalaryRow | None:
     核心句：同程旅行 产品经理 薪酬区间: 8K - 50K，其中85.5%的岗位拿￥20-50K
     样本句：取自近一年 131 个相关岗位
     地区表：苏州\x00￥25.1K\x0043.5%(57)
+
+    薪酬口径：区间 (low+high)/2 会系统性虚高（"20-50K" 实际 85% 岗位在 20-50K
+    但集中于下半段），优先用分布区间 × 占比加权；无分布数据才退回区间中点。
     """
     m = re.search(r"jobui\.com/company/(\d+)/salary/j/([a-z]+)/", url)
     if not m:
@@ -209,9 +217,62 @@ def parse_jobui_company_subpage(html: str, url: str) -> SalaryRow | None:
     row.position = m.group(1).strip()
     row.monthly_low = float(m.group(2)) * 1000
     row.monthly_high = float(m.group(3)) * 1000
-    row.annual_low = row.monthly_low * 12
-    row.annual_high = row.monthly_high * 12
-    row.annual_avg = (row.annual_low + row.annual_high) / 2
+
+    # 分布加权：页面有 6 段桶（8-10K...50K以上），但 20-30K/30-50K 等热门桶
+    # 占比隐藏（***），只露「最多岗位拿 X-YK」众数句 + 「其中86.1%拿￥20-50K」汇总句。
+    # 策略：可见桶按占比取中点；隐藏质量 = 总% - 可见%，全部归到众数桶；
+    # 「50K以上」按 50-65K 估计。加权均值远比全区间中点接近真实。
+    i_rng = text.find("薪酬区间")
+    flat_seg = re.sub(r"[\n\r\t ]+", "\x00", text[i_rng:i_rng + 2200]) if i_rng >= 0 else ""
+    pairs = re.findall(
+        r"(?:\x00|^)(\d+\.?\d*)%\x00+(\d+\.?\d*)-(\d+\.?\d*)K", flat_seg)
+    all_buckets = re.findall(r"\x00(\d+\.?\d*)-(\d+\.?\d*)K\x00", flat_seg)
+    m_mode = re.search(r"最多岗位拿\s*(\d+\.?\d*)-(\d+\.?\d*)K", text[i_rng:i_rng + 3000]) if i_rng >= 0 else None
+    m_total = re.search(r"其中(\d+\.?\d*)%的岗位拿￥?(\d+\.?\d*)-(\d+\.?\d*)K", text)
+
+    if all_buckets:
+        vis = {f"{lo}-{hi}K": float(p) for p, lo, hi in pairs}
+        seen = [f"{lo}-{hi}K" for lo, hi in all_buckets]
+        # 去重保序（同一段区间可能重复出现）
+        seen = list(dict.fromkeys(seen))
+        hidden_names = [b for b in seen if b not in vis]
+        mode_name = f"{m_mode.group(1)}-{m_mode.group(2)}K" if m_mode else (hidden_names[0] if hidden_names else None)
+        # 50K以上 开区间按 50-65K 估计
+        def mid_of(name: str) -> float:
+            m = re.match(r"(\d+)-(\d+)K", name)
+            if m:
+                return (float(m.group(1)) + float(m.group(2))) / 2
+            m = re.match(r"(\d+)K以上", name)
+            return float(m.group(1)) + 7.5 if m else 0.0
+        weighted_sum, weight_tot = 0.0, 0.0
+        for name, pct in vis.items():
+            weighted_sum += mid_of(name) * pct
+            weight_tot += pct
+        total_pct = float(m_total.group(1)) if m_total else weight_tot
+        hidden_mass = max(total_pct - weight_tot, 0.0)
+        if hidden_mass > 0 and mode_name:
+            weighted_sum += mid_of(mode_name) * hidden_mass
+            weight_tot += hidden_mass
+        if weight_tot > 0:
+            monthly_mid = weighted_sum / weight_tot * 1000  # K → 元
+            row.annual_low = monthly_mid * 12 * 0.85
+            row.annual_high = monthly_mid * 12 * 1.15
+            row.annual_avg = monthly_mid * 12
+            row.extra["wage_basis"] = "distribution_weighted"
+            row.extra["wage_buckets"] = {**vis, mode_name: hidden_mass} if hidden_mass else vis
+    elif m_total:
+        # 只有汇总句，无桶表：用汇总区间中点（比全区间中点窄）
+        dlo, dhi = float(m_total.group(2)), float(m_total.group(3))
+        monthly_mid = (dlo + dhi) / 2 * 1000
+        row.annual_low = monthly_mid * 12 * 0.9
+        row.annual_high = monthly_mid * 12 * 1.1
+        row.annual_avg = monthly_mid * 12
+        row.extra["wage_basis"] = "distribution_summary"
+    else:
+        row.annual_low = row.monthly_low * 12
+        row.annual_high = row.monthly_high * 12
+        row.annual_avg = (row.annual_low + row.annual_high) / 2
+        row.extra["wage_basis"] = "range_midpoint"
 
     m2 = re.search(r"取自近一年\s*(\d+)\s*个相关岗位", text)
     if m2:

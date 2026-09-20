@@ -52,11 +52,14 @@ def get_records(
     position: str | None = None,
     level: str | None = None,
     city: str | None = None,
+    job_family_id: int | None = None,
+    company_type: str | None = None,
     limit: int = Query(50, le=200),
     db: Session = Depends(get_db),
 ):
     """穿透：原始记录（证据链）。"""
-    return stats.drill_records(db, position, level, city, limit)
+    return stats.drill_records(db, position, level, city, limit,
+                               job_family_id=job_family_id, company_type=company_type)
 
 
 @router.get("/benchmark")

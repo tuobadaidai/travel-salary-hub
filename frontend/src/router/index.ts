@@ -7,5 +7,6 @@ export const router = createRouter({
     { path: "/benchmark", name: "benchmark", component: () => import("../views/Benchmark.vue") },
     { path: "/companies", name: "companies", component: () => import("../views/Companies.vue") },
     { path: "/companies/:id", name: "companyDetail", component: () => import("../views/CompanyDetail.vue") },
+    { path: "/data", name: "dataMaintenance", component: () => import("../views/DataMaintenance.vue") },
   ],
 })
