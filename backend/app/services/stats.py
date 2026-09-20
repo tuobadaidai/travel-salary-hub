@@ -357,18 +357,39 @@ def benchmark_by_grade(db: Session, position: str,
     except Exception:
         pass
 
-    # 2) 市场侧：按 position_norm + 等效 level 聚合
+    # 2) 市场侧：按 position_norm + 等效 level 聚合（排除 report: 来源，方案 B）
     # 先把该岗位所有市场记录拉出来，再在内存里按 level 分桶
     market_groups: dict[str, dict[str, list[float]]] = {}
     q = db.query(
         SalaryRecord.level, SalaryRecord.city, METRIC
-    ).filter(SalaryRecord.position_norm == pos_norm, METRIC.isnot(None))
+    ).filter(
+        SalaryRecord.position_norm == pos_norm,
+        METRIC.isnot(None),
+        ~SalaryRecord.source.like("report:%"),
+    )
     if cities:
         q = q.filter(SalaryRecord.city.in_(cities))
     for lv, ct, val in q.all():
         if not lv or not ct or val is None:
             continue
         market_groups.setdefault(lv, {}).setdefault(ct, []).append(float(val))
+
+    # 2b) 报告基准（方案 B）：source like 'report:%'，单独聚合，不参与 gap
+    report_groups: dict[str, list[float]] = {}
+    report_labels: set[str] = set()
+    rq = db.query(
+        SalaryRecord.level, METRIC, SalaryRecord.source
+    ).filter(
+        SalaryRecord.position_norm == pos_norm,
+        METRIC.isnot(None),
+        SalaryRecord.source.like("report:%"),
+    )
+    for lv, val, src in rq.all():
+        if not lv or val is None:
+            continue
+        report_groups.setdefault(lv, []).append(float(val))
+        if src:
+            report_labels.add(src)
 
     # 3) 把市场 level 桶"反向"挂到每个 DIDA grade 上
     market_by_grade: dict[str, dict[str, list[float]]] = {}
@@ -377,6 +398,15 @@ def benchmark_by_grade(db: Session, position: str,
         equiv = GRADE_TO_LEVEL.get(g)
         if equiv and equiv in market_groups:
             market_by_grade[g] = market_groups[equiv]
+
+    # 3b) 把报告 level 桶反向挂到每个 DIDA grade（与 market 同构，但不分城市）
+    national_ref: dict[str, dict] = {}
+    for gmeta in GRADE_META:
+        g = gmeta["code"]
+        equiv = GRADE_TO_LEVEL.get(g)
+        if equiv and equiv in report_groups:
+            q = _quantiles(report_groups[equiv])
+            national_ref[g] = q  # {count, p25, p50, p75, p90, reliable}
 
     # 4) 城市并集
     all_cities = sorted({c for g in market_by_grade for c in market_by_grade[g]} |
@@ -396,4 +426,8 @@ def benchmark_by_grade(db: Session, position: str,
         "cities": all_cities,
         "market": _mk(market_by_grade),
         "dida": _mk(dida_groups),
+        "national_reference": {
+            "labels": sorted(report_labels),
+            "by_grade": national_ref,
+        },
     }

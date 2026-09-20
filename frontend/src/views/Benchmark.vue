@@ -205,6 +205,32 @@ watch([selected, cityFilter], loadMatrix, { deep: true })
       </div>
     </div>
 
+    <!-- 全国 base 参考线（来自上传的薪酬报告，方案 B：不参与 gap 计算） -->
+    <div class="card" v-if="matrix && matrix.national_reference && Object.keys(matrix.national_reference.by_grade).length">
+      <div class="card-head">
+        <h3>全国 base 参考线（薪酬报告）</h3>
+        <span class="hint">来源：{{ matrix.national_reference.labels.join(' · ') }} · 基本薪资，不含奖金/股票 · 不参与上方差距计算</span>
+      </div>
+      <div class="card-body">
+        <table class="ref-table">
+          <thead>
+            <tr><th>DIDA 职级</th><th>报告 P25</th><th>报告 P50</th><th>报告 P75</th><th>样本</th></tr>
+          </thead>
+          <tbody>
+            <template v-for="g in visibleGrades" :key="g.code">
+            <tr v-if="matrix.national_reference.by_grade[g.code]">
+              <td class="g-cell">{{ g.code }} · {{ g.title }}</td>
+              <td class="num">{{ wan(matrix.national_reference.by_grade[g.code].p25) }} 万</td>
+              <td class="num strong">{{ wan(matrix.national_reference.by_grade[g.code].p50) }} 万</td>
+              <td class="num">{{ wan(matrix.national_reference.by_grade[g.code].p75) }} 万</td>
+              <td>{{ matrix.national_reference.by_grade[g.code].count }}</td>
+            </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <el-drawer v-model="drawer" :title="drillTitle" size="520px">
       <div style="font-size:12.5px;color:var(--text-3);margin-bottom:12px">{{ drillSub }}</div>
       <el-table :data="drillRows" size="small" stripe>
@@ -286,4 +312,13 @@ table.matrix td.cell.empty {
 .cell .bar > i { display: block; height: 100%; background: var(--brand); }
 .cell .bar > i.up { background: var(--warn); }
 .cell .bar > i.down { background: var(--good); }
+
+.ref-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ref-table th, .ref-table td {
+  border-bottom: 1px solid var(--border); padding: 8px 12px; text-align: left;
+}
+.ref-table th { color: var(--text-3); font-weight: 500; font-size: 12px; }
+.ref-table td.g-cell { font-weight: 600; }
+.ref-table td.num.strong { color: var(--brand-deep); font-weight: 600; font-size: 14px; }
+.ref-table tbody tr:hover { background: var(--surface-2); }
 </style>

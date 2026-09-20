@@ -95,6 +95,10 @@ export interface GradeBenchmark {
   cities: string[]
   market: Record<string, Record<string, QuantileItem>>
   dida: Record<string, Record<string, QuantileItem>>
+  national_reference: {
+    labels: string[]
+    by_grade: Record<string, QuantileItem>
+  }
 }
 
 export const DIMENSIONS = [

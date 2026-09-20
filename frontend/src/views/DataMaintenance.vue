@@ -65,6 +65,30 @@ async function onUpload(file: UploadFile) {
   return false
 }
 
+const uploadingPdf = ref(false)
+const reportLabel = ref("Michael Page 2026")
+async function onUploadReport(file: UploadFile) {
+  if (!file.raw) return false
+  uploadingPdf.value = true
+  const form = new FormData()
+  form.append("file", file.raw)
+  form.append("source_label", reportLabel.value)
+  try {
+    const r = await api.http.post("/admin/upload-report", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
+    const d = r.data as { added: number; skipped: number; parsed: number }
+    ElMessage.success(`解析完成：共 ${d.parsed} 行，新增 ${d.added} 条，跳过 ${d.skipped} 条`)
+    await load()
+  } catch (e) {
+    const detail = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+    ElMessage.error("解析失败: " + (detail ?? (e as Error).message))
+  } finally {
+    uploadingPdf.value = false
+  }
+  return false
+}
+
 onMounted(load)
 </script>
 
@@ -95,6 +119,38 @@ onMounted(load)
       <p class="note">
         上传即匿名化导入对标基准库（dida_payroll），仅保留 职务/部门/序列/职级/月薪/地点 字段。
         同一文件重复上传不会产生重复数据。
+      </p>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header>薪酬报告上传（PDF，如 Michael Page / 怡安翰威特）</template>
+      <div class="upload-row">
+        <el-upload
+          drag
+          accept=".pdf"
+          :show-file-list="false"
+          :http-request="onUploadReport"
+          :disabled="uploadingPdf"
+        >
+          <div class="up-inner">
+            <el-icon class="up-icon" :size="36"><upload-filled /></el-icon>
+            <div class="up-text">
+              <b>{{ uploadingPdf ? "解析中…" : "拖拽或点击上传薪酬报告 PDF" }}</b>
+              <div class="up-sub">
+                支持 Michael Page 风格（岗位名 + 千元范围/页）· 自动识别全国平均 ·
+                数据单独打 report: 标签，默认不混入 DIDA 差距计算，仅作"全国 base 参考线"
+              </div>
+            </div>
+          </div>
+        </el-upload>
+      </div>
+      <div class="label-row">
+        <span class="chip-label">来源标签：</span>
+        <el-input v-model="reportLabel" size="small" style="width: 240px" placeholder="例如：Michael Page 2026" />
+      </div>
+      <p class="note">
+        解析结果以 <code>source=report:&lt;标签&gt;</code> 写入 salary_records，city 统一记为"全国"。
+        岗位名与现有 position_norm 可能不一致（如"后端程序员" vs "后端工程师"），后续按需做岗位映射。
       </p>
     </el-card>
 
@@ -137,5 +193,8 @@ export default { components: { UploadFilled } }
 .up-sub { color: #909399; font-size: 12px; margin-top: 6px; }
 .up-icon { color: #6a8df5; }
 .note { color: #909399; font-size: 12px; margin: 12px 0 0; }
+.note code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; }
+.label-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.chip-label { font-size: 12px; color: #909399; }
 .head { display: flex; justify-content: space-between; align-items: center; }
 </style>
