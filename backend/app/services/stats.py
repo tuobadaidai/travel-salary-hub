@@ -20,6 +20,33 @@ GROUP_COLS = {
 
 _LEVEL_ORDER = ["专员", "高级", "主管", "经理", "总监", "VP"]
 
+# DIDA 职级 → 等效市场 level（与 pipeline/import_dida_payroll.py GRADE_TO_LEVEL 保持一致）
+GRADE_TO_LEVEL = {
+    "O1": "专员", "O2": "专员", "O3": "高级", "O4": "主管",
+    "P0": "专员", "P1": "专员", "P2": "高级", "P3": "高级",
+    "P4": "主管", "P5": "经理", "P6": "经理", "P7": "总监",
+    "P8": "总监", "P9": "VP",
+    "M4": "总监", "M5": "VP",
+}
+# DIDA 职级元数据（code → 标准岗位名/序列/展示顺序）
+GRADE_META = [
+    {"code": "P0", "title": "专员",     "seq": "P"},
+    {"code": "P1", "title": "高级专员", "seq": "P"},
+    {"code": "P2", "title": "主管",     "seq": "P"},
+    {"code": "P3", "title": "经理",     "seq": "P"},
+    {"code": "P4", "title": "高级经理", "seq": "P"},
+    {"code": "P5", "title": "资深经理", "seq": "P"},
+    {"code": "P6", "title": "总监",     "seq": "P"},
+    {"code": "P7", "title": "高级总监", "seq": "P"},
+    {"code": "P8", "title": "资深总监", "seq": "P"},
+    {"code": "O1", "title": "初级专员", "seq": "O"},
+    {"code": "O2", "title": "中级专员", "seq": "O"},
+    {"code": "O3", "title": "高级专员", "seq": "O"},
+    {"code": "O4", "title": "组长",     "seq": "O"},
+    {"code": "M4", "title": "SVP/VP",   "seq": "M"},
+    {"code": "M5", "title": "CEO/总裁", "seq": "M"},
+]
+
 
 def _quantiles(values: list[float]) -> dict:
     arr = np.array(values, dtype=float)
@@ -274,3 +301,99 @@ def drill_records(db: Session, position: str | None = None, level: str | None = 
         }
         for r in rows
     ]
+
+
+# ============================================================
+# DIDA 职级维度对标（apple-to-apple）
+# ============================================================
+def grades_meta(db: Session) -> list[dict]:
+    """返回所有 DIDA 职级 + 在册人数。"""
+    from sqlalchemy import text as _text
+    rows = db.execute(_text(
+        "SELECT grade, COUNT(*) AS n FROM dida_payroll "
+        "GROUP BY grade"
+    )).fetchall()
+    cnt = {g: n for g, n in rows}
+    out = []
+    for meta in GRADE_META:
+        out.append({
+            "code": meta["code"],
+            "title": meta["title"],
+            "seq": meta["seq"],
+            "market_level": GRADE_TO_LEVEL.get(meta["code"]),
+            "count": cnt.get(meta["code"], 0),
+        })
+    return out
+
+
+def benchmark_by_grade(db: Session, position: str,
+                      cities: list[str] | None = None) -> dict:
+    """按 DIDA 职级（P0-P8/O1-O4/M4-M5）做行轴的对标矩阵。
+
+    - dida：直接按 dida_payroll.grade × location 分位数
+    - market：按 GRADE_TO_LEVEL 映射到等效市场 level，再查 salary_records
+    返回 {position, grades: [...], cities: [...],
+          market: {grade: {city: quantiles}}, dida: {grade: {city: quantiles}}}
+    """
+    from sqlalchemy import text as _text
+    pos_norm = position.strip().lower()
+
+    # 1) DIDA 侧：按 grade 聚合年化薪酬
+    dida_groups: dict[str, dict[str, list[float]]] = {}
+    try:
+        prows = db.execute(_text(
+            "SELECT grade, location, monthly_cny FROM dida_payroll "
+            "WHERE title = :kw"
+        ), {"kw": pos_norm}).fetchall()
+        if not prows:
+            prows = db.execute(_text(
+                "SELECT grade, location, monthly_cny FROM dida_payroll "
+                "WHERE title LIKE :kw"
+            ), {"kw": f"%{pos_norm}%"}).fetchall()
+        for grade, loc, monthly in prows:
+            if not grade or not loc or monthly is None:
+                continue
+            dida_groups.setdefault(grade, {}).setdefault(loc, []).append(float(monthly) * 12)
+    except Exception:
+        pass
+
+    # 2) 市场侧：按 position_norm + 等效 level 聚合
+    # 先把该岗位所有市场记录拉出来，再在内存里按 level 分桶
+    market_groups: dict[str, dict[str, list[float]]] = {}
+    q = db.query(
+        SalaryRecord.level, SalaryRecord.city, METRIC
+    ).filter(SalaryRecord.position_norm == pos_norm, METRIC.isnot(None))
+    if cities:
+        q = q.filter(SalaryRecord.city.in_(cities))
+    for lv, ct, val in q.all():
+        if not lv or not ct or val is None:
+            continue
+        market_groups.setdefault(lv, {}).setdefault(ct, []).append(float(val))
+
+    # 3) 把市场 level 桶"反向"挂到每个 DIDA grade 上
+    market_by_grade: dict[str, dict[str, list[float]]] = {}
+    for gmeta in GRADE_META:
+        g = gmeta["code"]
+        equiv = GRADE_TO_LEVEL.get(g)
+        if equiv and equiv in market_groups:
+            market_by_grade[g] = market_groups[equiv]
+
+    # 4) 城市并集
+    all_cities = sorted({c for g in market_by_grade for c in market_by_grade[g]} |
+                        {c for g in dida_groups for c in dida_groups[g]})
+    if cities:
+        all_cities = [c for c in all_cities if c in cities]
+
+    def _mk(src: dict[str, dict[str, list[float]]]) -> dict:
+        out = {}
+        for g, cts in src.items():
+            out[g] = {ct: _quantiles(vals) for ct, vals in cts.items()}
+        return out
+
+    return {
+        "position": pos_norm,
+        "grades": grades_meta(db),
+        "cities": all_cities,
+        "market": _mk(market_by_grade),
+        "dida": _mk(dida_groups),
+    }

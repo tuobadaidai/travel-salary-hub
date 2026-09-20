@@ -3,83 +3,86 @@ import { computed, onMounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { ElMessage } from "element-plus"
 import {
-  api, type BenchmarkMatrix, type BenchCell, type PositionItem, type DrillRecord,
+  api, type GradeBenchmark, type GradeMeta, type PositionItem, type DrillRecord, type QuantileItem,
 } from "../api/salary"
 
-const keyword = ref("")
 const route = useRoute()
 const router = useRouter()
-const positions = ref<PositionItem[]>([])
-const selected = ref<string>("")
-const cityFilter = ref<string[]>([])
-const matrix = ref<BenchmarkMatrix | null>(null)
-const loading = ref(false)
-const wan = (v: number) => `${(v / 10000).toFixed(1)}万`
 
-// 穿透抽屉
+const positions = ref<PositionItem[]>([])
+const grades = ref<GradeMeta[]>([])
+const selected = ref<string>("")
+const seqFilter = ref<"P" | "O" | "M" | "all">("P")
+const cityFilter = ref<string[]>([])
+const matrix = ref<GradeBenchmark | null>(null)
+const loading = ref(false)
+
+// 抽屉
 const drawer = ref(false)
 const drillTitle = ref("")
-const drillSide = ref<"market" | "dida">("market")
+const drillSub = ref("")
 const drillRows = ref<DrillRecord[]>([])
 
-function cell(src: Record<string, Record<string, BenchCell>> | undefined, lv: string, ct: string): BenchCell | null {
-  return src?.[lv]?.[ct] ?? null
-}
+const wan = (v: number | null | undefined) => v == null ? "—" : (v / 10000).toFixed(1)
 
 const filteredPositions = computed(() => {
-  const kw = keyword.value.trim()
-  return kw ? positions.value.filter(p => p.position.includes(kw)) : positions.value.slice(0, 50)
+  const kw = selected.value.trim()
+  return kw ? positions.value.filter(p => p.position.includes(kw)) : positions.value
 })
 
+const visibleGrades = computed(() => {
+  if (seqFilter.value === "all") return grades.value
+  return grades.value.filter(g => g.seq === seqFilter.value)
+})
 const cities = computed(() => {
   const all = matrix.value?.cities ?? []
   return cityFilter.value.length ? all.filter(c => cityFilter.value.includes(c)) : all
 })
-const levels = computed(() => matrix.value?.levels ?? [])
 
-// 市场单元格渲染：P50 主数字 + P25-P75 区间，不可靠置灰
-function marketText(lv: string, ct: string): string {
-  const c = cell(matrix.value?.market, lv, ct)
-  if (!c) return "—"
-  return `${wan(c.p50)}${c.reliable ? "" : "*"}`
+function cell(src: Record<string, Record<string, QuantileItem>> | undefined, g: string, ct: string): QuantileItem | null {
+  return src?.[g]?.[ct] ?? null
 }
-function marketTitle(lv: string, ct: string): string {
-  const c = cell(matrix.value?.market, lv, ct)
-  if (!c) return "无市场数据"
-  return `样本 ${c.count}${c.reliable ? "" : "（<5 仅供参考）"}\nP25 ${wan(c.p25)} | P50 ${wan(c.p50)}\nP75 ${wan(c.p75)} | P90 ${wan(c.p90)}`
+
+function gapPct(g: string, ct: string): number | null {
+  const m = cell(matrix.value?.market, g, ct)
+  const d = cell(matrix.value?.dida, g, ct)
+  if (!m || !d || !m.reliable || m.p50 === 0) return null
+  return (d.p50 - m.p50) / m.p50
 }
-function didaText(lv: string, ct: string): string {
-  const c = cell(matrix.value?.dida, lv, ct)
-  if (!c) return "—"
-  return `${wan(c.p50)}${c.reliable ? "" : "*"}`
+function gapCls(g: string, ct: string): string {
+  const p = gapPct(g, ct)
+  if (p == null) return "flat"
+  if (Math.abs(p) < 0.05) return "flat"
+  return p > 0 ? "up" : "down"
 }
-function didaTitle(lv: string, ct: string): string {
-  const c = cell(matrix.value?.dida, lv, ct)
-  if (!c) return "无内部数据"
-  return `人数 ${c.count}\nP25 ${wan(c.p25)} | P50 ${wan(c.p50)}\nP75 ${wan(c.p75)} | P90 ${wan(c.p90)}`
+function gapTxt(g: string, ct: string): string {
+  const p = gapPct(g, ct)
+  if (p == null) return "—"
+  return (p > 0 ? "+" : "") + (p * 100).toFixed(1) + "%"
 }
-// 差值 = 内部 P50 - 市场 P50，正=高于市场
-function gapText(lv: string, ct: string): string {
-  const m = cell(matrix.value?.market, lv, ct)
-  const d = cell(matrix.value?.dida, lv, ct)
-  if (!m || !d || !m.reliable) return "—"
-  const diff = d.p50 - m.p50
-  const pct = Math.round((diff / m.p50) * 100)
-  return `${pct > 0 ? "+" : ""}${pct}%`
+
+function toggleCity(c: string) {
+  const all = matrix.value?.cities ?? []
+  const i = cityFilter.value.indexOf(c)
+  if (i >= 0) cityFilter.value.splice(i, 1)
+  else cityFilter.value.push(c)
+  // 清空时视为"全部"
+  if (!cityFilter.value.length) cityFilter.value = all.slice()
 }
-function gapClass(lv: string, ct: string): string {
-  const m = cell(matrix.value?.market, lv, ct)
-  const d = cell(matrix.value?.dida, lv, ct)
-  if (!m || !d || !m.reliable) return ""
-  const pct = (d.p50 - m.p50) / m.p50
-  return pct >= 0.1 ? "gap-high" : pct <= -0.1 ? "gap-low" : "gap-mid"
+function barWidth(g: string, ct: string): string {
+  const p = gapPct(g, ct)
+  if (p == null) return "0%"
+  return Math.min(100, Math.abs(p) * 100 * 3) + "%"
 }
 
 async function loadMatrix() {
   if (!selected.value) return
   loading.value = true
   try {
-    matrix.value = await api.benchmark({ position: selected.value, city: cityFilter.value.join(",") || undefined })
+    matrix.value = await api.benchmarkByGrade({
+      position: selected.value,
+      city: cityFilter.value.join(",") || undefined,
+    })
   } catch (e) {
     ElMessage.error("加载失败: " + (e as Error).message)
   } finally {
@@ -87,19 +90,18 @@ async function loadMatrix() {
   }
 }
 
-// 点市场格 → 穿透市场明细；点 DIDA 格 → 穿透内部明细
-async function openDrill(lv: string, ct: string, side: "market" | "dida") {
-  const c = cell(matrix.value?.[side], lv, ct)
-  if (!c) return
-  drillTitle.value = `${matrix.value?.position} · ${lv} · ${ct}（${side === "market" ? "市场" : "DIDA 内部"}）`
-  drillSide.value = side
+async function openDrill(grade: GradeMeta, ct: string) {
+  const m = cell(matrix.value?.market, grade.code, ct)
+  const d = cell(matrix.value?.dida, grade.code, ct)
+  drillTitle.value = `${selected.value} · ${ct} · ${grade.code} ${grade.title}`
+  drillSub.value = `市场 P50 ${wan(m?.p50)} 万 · DIDA P50 ${wan(d?.p50)} 万`
   try {
-    if (side === "market") {
-      drillRows.value = await api.records({ position: selected.value, level: lv, city: ct, limit: 80 })
-    } else {
-      // DIDA 内部走 records 的 position 匹配不到（内部表独立），此处展示该格摘要信息
-      drillRows.value = []
-    }
+    drillRows.value = await api.records({
+      position: selected.value,
+      level: grade.market_level ?? undefined,
+      city: ct,
+      limit: 50,
+    })
   } catch (e) {
     ElMessage.error("穿透失败: " + (e as Error).message)
   }
@@ -107,120 +109,181 @@ async function openDrill(lv: string, ct: string, side: "market" | "dida") {
 }
 
 onMounted(async () => {
-  positions.value = await api.positions()
+  const [ps, gs] = await Promise.all([api.positions(), api.grades()])
+  positions.value = ps
+  grades.value = gs
   const qp = route.query.position as string | undefined
-  if (qp && positions.value.some(p => p.position === qp)) selected.value = qp
+  if (qp && ps.some(p => p.position === qp)) selected.value = qp
+  else if (ps.length) selected.value = ps[0].position
 })
-watch(selected, loadMatrix)
-watch(cityFilter, loadMatrix, { deep: true })
-watch(selected, v => {
-  router.replace({ query: v ? { position: v } : {} })
-})
+watch(selected, v => { router.replace({ query: v ? { position: v } : {} }) })
+watch([selected, cityFilter], loadMatrix, { deep: true })
 </script>
 
 <template>
-  <div class="bench">
-    <el-card shadow="never" class="pick-card">
-      <el-select
-        v-model="selected" filterable remote :remote-method="(q: string) => (keyword = q)"
-        placeholder="输入或选择岗位，如 客服专员 / 后端工程师 / 产品经理" style="width: 380px"
-      >
+  <div>
+    <div class="page-head">
+      <h1>岗位对标</h1>
+      <p>选岗位 → 按 DIDA 职级（P0–P8 / O1–O4 / M4–M5）看级别 × 城市矩阵。每格市场 P50 vs DIDA P50，点格穿透证据链。</p>
+    </div>
+
+    <div class="pos-hero">
+      <div>
+        <div class="ttl">{{ selected || "选择岗位" }}</div>
+        <div class="desc">
+          覆盖 {{ cities.length }} 城市 · {{ visibleGrades.length }} 个 DIDA 职级
+          <span v-if="matrix"> · 市场样本 {{ matrix.market ? Object.values(matrix.market).reduce((s,c)=>s+Object.values(c).reduce((x,y)=>x+y.count,0),0) : 0 }} 条</span>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div v-if="matrix" class="stat">
+          <div class="l">当前岗位 DIDA 在册</div>
+          <div class="v num">{{ grades.filter(g => matrix?.dida[g.code] && Object.keys(matrix.dida[g.code]).length).length }} 档有数据</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chip-row">
+      <span class="chip-label">序列：</span>
+      <span class="chip" :class="{on: seqFilter==='P'}" @click="seqFilter='P'">P 序列</span>
+      <span class="chip" :class="{on: seqFilter==='O'}" @click="seqFilter='O'">O 序列</span>
+      <span class="chip" :class="{on: seqFilter==='M'}" @click="seqFilter='M'">M 序列</span>
+      <span class="chip" :class="{on: seqFilter==='all'}" @click="seqFilter='all'">全部</span>
+    </div>
+
+    <div class="chip-row">
+      <span class="chip-label">岗位：</span>
+      <el-select v-model="selected" filterable placeholder="搜索岗位" style="width: 320px; margin-right: 12px">
         <el-option v-for="p in filteredPositions" :key="p.position" :value="p.position"
           :label="`${p.position}（${p.count}条）`" />
       </el-select>
-      <el-select v-model="cityFilter" multiple collapse-tags placeholder="城市过滤（默认全部）" clearable style="width: 260px">
-        <el-option v-for="c in matrix?.cities ?? []" :key="c" :label="c" :value="c" />
-      </el-select>
-      <span class="note">* = 样本不足5条，仅供参考；差距 = 内部P50 vs 市场P50</span>
-    </el-card>
+      <span class="chip-label">城市：</span>
+      <span class="chip on" @click="cityFilter = (matrix?.cities ?? []).slice()">全部</span>
+      <span v-for="c in matrix?.cities ?? []" :key="c"
+        class="chip" :class="{on: !cityFilter.length || cityFilter.includes(c)}"
+        @click="toggleCity(c)">{{ c }}</span>
+    </div>
 
-    <el-card v-if="matrix" v-loading="loading" shadow="never">
-      <template #header>
-        「{{ matrix.position }}」岗位对标矩阵 · 市场年薪 CNY（来源：jobui 聚合 / 历史 JD）vs DIDA 内部
-      </template>
-      <table class="matrix">
-        <thead>
-          <tr>
-            <th class="corner">级别 \ 城市</th>
-            <th v-for="ct in cities" :key="ct" colspan="3">{{ ct }}</th>
-          </tr>
-          <tr class="sub">
-            <th class="corner"></th>
-            <template v-for="ct in cities" :key="ct">
-              <th>市场</th><th>DIDA</th><th>差距</th>
-            </template>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="lv in levels" :key="lv">
-            <th class="row-head">{{ lv }}</th>
-            <template v-for="ct in cities" :key="ct">
-              <td :title="marketTitle(lv, ct)" class="clickable"
-                :class="{ thin: !cell(matrix.market, lv, ct)?.reliable }"
-                @click="openDrill(lv, ct, 'market')">
-                {{ marketText(lv, ct) }}
+    <div class="card" v-loading="loading">
+      <div class="card-head">
+        <h3>DIDA 职级 × 城市 薪酬矩阵（万元/年）</h3>
+        <span class="hint">红=DIDA 高于市场 · 绿=DIDA 低于市场 · 灰=样本&lt;5</span>
+      </div>
+      <div class="card-body matrix-wrap" v-if="matrix">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>DIDA 职级 ＼ 城市</th>
+              <th v-for="ct in cities" :key="ct">{{ ct }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="g in visibleGrades" :key="g.code">
+              <th class="rowhead">
+                <div class="g-code">{{ g.code }} · {{ g.title }}</div>
+                <div class="g-meta">DIDA 在册 {{ g.count }} 人</div>
+              </th>
+              <td v-for="ct in cities" :key="ct" class="cell"
+                :class="{empty: !(cell(matrix.market, g.code, ct) || cell(matrix.dida, g.code, ct))}"
+                @click="openDrill(g, ct)">
+                <template v-if="cell(matrix.market, g.code, ct) || cell(matrix.dida, g.code, ct)">
+                  <div class="row1">
+                    <span class="mkt">市场 P50 <b>{{ wan(cell(matrix.market, g.code, ct)?.p50) }}</b> 万</span>
+                    <span class="gap" :class="gapCls(g.code, ct)">{{ gapTxt(g.code, ct) }}</span>
+                  </div>
+                  <div class="dida">DIDA P50 <b>{{ wan(cell(matrix.dida, g.code, ct)?.p50) }}</b> 万</div>
+                  <div class="bar"><i :class="gapCls(g.code, ct)" :style="{width: barWidth(g.code, ct)}"></i></div>
+                </template>
+                <template v-else>无数据</template>
               </td>
-              <td :title="didaTitle(lv, ct)" class="clickable dida" @click="openDrill(lv, ct, 'dida')">
-                {{ didaText(lv, ct) }}
-              </td>
-              <td :class="gapClass(lv, ct)">{{ gapText(lv, ct) }}</td>
-            </template>
-          </tr>
-        </tbody>
-      </table>
-    </el-card>
-    <el-empty v-else description="选择岗位后展示 级别×城市 对标矩阵" />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-body" v-else>
+        <el-empty description="选择岗位后展示 DIDA 职级 × 城市 对标矩阵" />
+      </div>
+    </div>
 
-    <el-drawer v-model="drawer" :title="drillTitle" size="52%">
-      <template v-if="drillSide === 'market'">
-        <el-table :data="drillRows" size="small" stripe>
-          <el-table-column prop="company_name" label="来源" width="130" show-overflow-tooltip />
-          <el-table-column prop="salary_range" label="月薪区间" width="120" />
-          <el-table-column label="年薪CNY" width="100">
-            <template #default="{ row }">{{ row.annual_cny ? wan(row.annual_cny) : "-" }}</template>
-          </el-table-column>
-          <el-table-column prop="source" label="渠道" width="120" />
-          <el-table-column label="证据">
-            <template #default="{ row }">
-              <a v-if="row.source_url" :href="row.source_url" target="_blank" rel="noopener" class="ev-link">原文</a>
-              <span v-else class="ev-none">CSV</span>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-if="!drillRows.length" description="该格无逐条明细（聚合源数据仅保留分位汇总）" />
-      </template>
-      <template v-else>
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item
-            v-for="ct in cities" :key="ct"
-            :label="`${drillTitle.split('·')[1]?.trim() ?? ''} · ${ct}`">
-            {{ didaText(drillTitle.split('·')[1]?.trim() ?? '', ct) }}
-          </el-descriptions-item>
-        </el-descriptions>
-        <p class="dida-note">DIDA 内部数据来自薪酬表（匿名化），精确到职务×职级×地点。明细穿透请看「内部对标」。</p>
-      </template>
+    <el-drawer v-model="drawer" :title="drillTitle" size="520px">
+      <div style="font-size:12.5px;color:var(--text-3);margin-bottom:12px">{{ drillSub }}</div>
+      <el-table :data="drillRows" size="small" stripe>
+        <el-table-column prop="company_name" label="来源" width="140" show-overflow-tooltip />
+        <el-table-column prop="salary_range" label="月薪区间" width="130" />
+        <el-table-column label="年薪CNY" width="100">
+          <template #default="{ row }">{{ row.annual_cny ? wan(row.annual_cny)+'万' : '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="source" label="渠道" width="130" />
+        <el-table-column label="证据">
+          <template #default="{ row }">
+            <a v-if="row.source_url" :href="row.source_url" target="_blank" rel="noopener">原文</a>
+            <span v-else style="color:#8A94A3">CSV</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <p style="font-size:12px;color:var(--text-3);margin-top:10px">
+        * 区间中点待分布加权（PRD #2），数字仅供方向参考。
+      </p>
     </el-drawer>
   </div>
 </template>
 
 <style scoped>
-.bench { display: flex; flex-direction: column; gap: 16px; }
-.pick-card :deep(.el-card__body) { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.note { color: #909399; font-size: 12px; margin-left: auto; }
-.matrix { border-collapse: collapse; width: 100%; }
-.matrix th, .matrix td { border: 1px solid #e4e7ed; padding: 8px 10px; text-align: center; font-size: 13px; }
-.matrix thead th { background: #f5f7fa; }
-.matrix .corner { text-align: left; width: 90px; }
-.matrix .row-head { background: #f5f7fa; }
-.matrix td { min-width: 76px; cursor: default; }
-.matrix td.clickable { cursor: pointer; }
-.matrix td.clickable:hover { outline: 2px solid #3d6db3; outline-offset: -2px; }
-.matrix td.dida { background: #fdf8f6; }
-.matrix td.thin { color: #c0c4cc; }
-.gap-high { color: #d25b4a; font-weight: 600; background: #fdf1ef; }
-.gap-low { color: #4d9e60; font-weight: 600; background: #f0f9f2; }
-.gap-mid { color: #909399; }
-.ev-link { color: #3d6db3; }
-.ev-none { color: #c0c4cc; font-size: 12px; }
-.dida-note { color: #909399; font-size: 12px; margin-top: 12px; }
+.pos-hero {
+  background: linear-gradient(135deg, #0E7C7B 0%, #0A5F5E 100%);
+  color: #fff; border-radius: var(--radius); padding: 20px 24px;
+  margin-bottom: 16px; display: flex; align-items: center; gap: 24px;
+}
+.pos-hero .ttl { font-size: 20px; font-weight: 650; }
+.pos-hero .desc { font-size: 13px; opacity: 0.85; margin-top: 4px; }
+.hero-stats { margin-left: auto; display: flex; gap: 28px; }
+.hero-stats .l { font-size: 11.5px; opacity: 0.8; }
+.hero-stats .v { font-size: 20px; font-weight: 600; margin-top: 2px; }
+
+.chip {
+  padding: 5px 12px; border-radius: 999px; font-size: 12.5px;
+  border: 1px solid var(--border-strong); background: #fff; color: var(--text-2);
+  cursor: pointer; user-select: none;
+}
+.chip:hover { border-color: var(--brand); color: var(--brand); }
+.chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+.matrix-wrap { overflow-x: auto; }
+table.matrix { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12.5px; }
+table.matrix th, table.matrix td {
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: 0; text-align: center;
+}
+table.matrix thead th {
+  background: var(--surface-2); font-weight: 600; color: var(--text-2);
+  padding: 10px 8px; position: sticky; top: 0;
+}
+table.matrix .rowhead {
+  background: var(--surface-2); padding: 10px 14px; text-align: left; white-space: nowrap;
+  position: sticky; left: 0;
+}
+.g-code { font-weight: 600; color: var(--text); }
+.g-meta { font-weight: 400; font-size: 11px; color: var(--text-3); margin-top: 2px; }
+table.matrix td.cell {
+  height: 76px; cursor: pointer; padding: 8px 10px; min-width: 140px;
+  transition: background 0.12s;
+}
+table.matrix td.cell:hover { outline: 2px solid var(--brand); outline-offset: -2px; }
+table.matrix td.cell.empty {
+  background: repeating-linear-gradient(45deg, #FAFBFC, #FAFBFC 6px, #F2F3F5 6px, #F2F3F5 12px);
+  color: var(--text-3);
+}
+.cell .row1 { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.cell .mkt { font-size: 11.5px; color: var(--text-3); }
+.cell .mkt b { color: var(--text); font-size: 13.5px; font-weight: 600; }
+.cell .gap { font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; }
+.gap.up { color: var(--warn); background: var(--warn-soft); }
+.gap.down { color: var(--good); background: var(--good-soft); }
+.gap.flat { color: var(--text-3); background: var(--neutral-soft); }
+.cell .dida { font-size: 11.5px; color: var(--text-2); }
+.cell .dida b { color: var(--brand-deep); font-size: 13px; }
+.cell .bar { height: 3px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.cell .bar > i { display: block; height: 100%; background: var(--brand); }
+.cell .bar > i.up { background: var(--warn); }
+.cell .bar > i.down { background: var(--good); }
 </style>

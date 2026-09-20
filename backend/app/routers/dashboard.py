@@ -77,6 +77,25 @@ def get_benchmark(
     )
 
 
+@router.get("/grades")
+def get_grades(db: Session = Depends(get_db)):
+    """DIDA 职级元数据：code/title/seq/等效市场 level/在册人数。"""
+    return stats.grades_meta(db)
+
+
+@router.get("/benchmark-by-grade")
+def get_benchmark_by_grade(
+    position: str = Query(..., min_length=2),
+    city: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """按 DIDA 职级（P0-P8/O1-O4/M4-M5）做行轴的对标矩阵（apple-to-apple）。"""
+    return stats.benchmark_by_grade(
+        db, position,
+        cities=city.split(",") if city else None,
+    )
+
+
 @router.get("/stats/trend")
 def get_trend(
     city: str | None = None,

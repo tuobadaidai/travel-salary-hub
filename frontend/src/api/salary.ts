@@ -81,6 +81,22 @@ export interface DrillRecord {
   sample_count: number | null
 }
 
+export interface GradeMeta {
+  code: string
+  title: string
+  seq: "P" | "O" | "M"
+  market_level: string | null
+  count: number
+}
+
+export interface GradeBenchmark {
+  position: string
+  grades: GradeMeta[]
+  cities: string[]
+  market: Record<string, Record<string, QuantileItem>>
+  dida: Record<string, Record<string, QuantileItem>>
+}
+
 export const DIMENSIONS = [
   { value: "job_family", label: "岗位族" },
   { value: "level", label: "级别" },
@@ -102,6 +118,9 @@ export const api = {
   positions: () => http.get<PositionItem[]>("/positions").then(r => r.data),
   benchmark: (params: { position: string; level?: string; city?: string }) =>
     http.get<BenchmarkMatrix>("/benchmark", { params }).then(r => r.data),
+  grades: () => http.get<GradeMeta[]>("/grades").then(r => r.data),
+  benchmarkByGrade: (params: { position: string; city?: string }) =>
+    http.get<GradeBenchmark>("/benchmark-by-grade", { params }).then(r => r.data),
   heatmap: (params: { row_dim: string; col_dim: string }) =>
     http.get<Heatmap>("/stats/heatmap", { params }).then(r => r.data),
   records: (params: { position?: string; level?: string; city?: string; limit?: number }) =>
