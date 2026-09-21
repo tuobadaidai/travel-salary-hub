@@ -25,11 +25,6 @@ const drillRows = ref<DrillRecord[]>([])
 
 const wan = (v: number | null | undefined) => v == null ? "—" : (v / 10000).toFixed(1)
 
-const filteredPositions = computed(() => {
-  const kw = selected.value.trim()
-  return kw ? positions.value.filter(p => p.position.includes(kw)) : positions.value
-})
-
 const visibleGrades = computed(() => {
   if (seqFilter.value === "all") return grades.value
   return grades.value.filter(g => g.seq === seqFilter.value)
@@ -154,7 +149,7 @@ watch([selected, cityFilter], loadMatrix, { deep: true })
     <div class="chip-row">
       <span class="chip-label">岗位：</span>
       <el-select v-model="selected" filterable placeholder="搜索岗位" style="width: 320px; margin-right: 12px">
-        <el-option v-for="p in filteredPositions" :key="p.position" :value="p.position"
+        <el-option v-for="p in positions" :key="p.position" :value="p.position"
           :label="`${p.position}（${p.count}条）`" />
       </el-select>
       <span class="chip-label">城市：</span>
