@@ -359,6 +359,9 @@ def benchmark_by_grade(db: Session, position: str,
 
     # 2) 市场侧：按 position_norm + 等效 level 聚合（排除 report: 来源，方案 B）
     # 先把该岗位所有市场记录拉出来，再在内存里按 level 分桶
+    # 时间窗口：默认只取最近 12 个月的市场数据，避免陈旧数据拉低分位
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=365)).date().isoformat()
     market_groups: dict[str, dict[str, list[float]]] = {}
     q = db.query(
         SalaryRecord.level, SalaryRecord.city, METRIC
@@ -366,6 +369,7 @@ def benchmark_by_grade(db: Session, position: str,
         SalaryRecord.position_norm == pos_norm,
         METRIC.isnot(None),
         ~SalaryRecord.source.like("report:%"),
+        SalaryRecord.collect_date >= cutoff,
     )
     if cities:
         q = q.filter(SalaryRecord.city.in_(cities))

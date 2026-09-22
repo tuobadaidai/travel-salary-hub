@@ -25,6 +25,8 @@ app.include_router(admin.router)
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(engine)
+    from app.scheduler import start_scheduler
+    start_scheduler()
 
 
 dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

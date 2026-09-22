@@ -88,6 +88,27 @@ async function triggerJob(name: string) {
   }
 }
 
+interface ScheduleItem {
+  source_name: string; cadence: string; enabled: boolean
+  last_run_at?: string; last_success_at?: string
+}
+const schedules = ref<ScheduleItem[]>([])
+async function loadSchedules() {
+  try { schedules.value = await api.http.get("/admin/schedules").then(r => r.data) } catch {}
+}
+async function toggleSchedule(name: string) {
+  try {
+    await api.http.post(`/admin/schedules/${name}/toggle`)
+    loadSchedules()
+  } catch (e) {
+    ElMessage.error("操作失败: " + (e as Error).message)
+  }
+}
+function fmtDate(s?: string) {
+  if (!s) return "从未运行"
+  return s.slice(0, 10)
+}
+
 async function onUploadReport(file: UploadFile) {
   if (!file.raw) return false
   uploadingPdf.value = true
@@ -110,7 +131,7 @@ async function onUploadReport(file: UploadFile) {
   return false
 }
 
-onMounted(() => { load(); loadJobs() })
+onMounted(() => { load(); loadJobs(); loadSchedules() })
 </script>
 
 <template>
@@ -189,6 +210,29 @@ onMounted(() => { load(); loadJobs() })
       <p class="note">
         采集任务后台异步运行，完成后在下方"采集批次记录"查看结果。新渠道（51job/智联/看准/Levels.fyi）
         正在接入中，完成后会自动出现在这里。
+      </p>
+    </el-card>
+
+    <el-card shadow="never">
+      <template #header>自动调度（数据持续积累）</template>
+      <div v-for="s in schedules" :key="s.source_name" class="job-row">
+        <div class="job-info">
+          <div class="job-label">{{ s.source_name }}
+            <el-tag size="small" :type="s.enabled ? 'success' : 'info'" style="margin-left:6px">
+              {{ s.enabled ? '运行中' : '已暂停' }}
+            </el-tag>
+          </div>
+          <div class="job-desc">
+            频率：{{ s.cadence }} · 上次运行：{{ fmtDate(s.last_run_at) }} · 成功：{{ fmtDate(s.last_success_at) }}
+          </div>
+        </div>
+        <el-button size="small" @click="toggleSchedule(s.source_name)">
+          {{ s.enabled ? '暂停' : '启用' }}
+        </el-button>
+      </div>
+      <p class="note">
+        启用后，系统每天自动检查一次：超过设定频率未成功运行的数据源会自动触发采集。
+        薪酬对标矩阵默认只使用最近 12 个月的数据，历史数据保留但不参与计算。
       </p>
     </el-card>
 

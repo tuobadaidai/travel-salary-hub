@@ -26,11 +26,24 @@ def list_schedules(db: Session = Depends(get_db)):
     rows = db.query(IngestSchedule).order_by(IngestSchedule.source_name).all()
     return [
         {
-            "source_name": r.source_name, "cadence": r.cadence, "enabled": bool(r.enabled),
+            "source_name": r.source_name, "cadence": r.cadence,
+            "enabled": bool(r.enabled),
+            "last_run_at": getattr(r, "last_run_at", None),
             "last_success_at": r.last_success_at, "next_due_at": r.next_due_at,
         }
         for r in rows
     ]
+
+
+@router.post("/schedules/{source_name}/toggle")
+def toggle_schedule(source_name: str, db: Session = Depends(get_db)):
+    """启停某个数据源的自动调度。"""
+    s = db.query(IngestSchedule).filter_by(source_name=source_name).first()
+    if not s:
+        raise HTTPException(404, f"unknown schedule: {source_name}")
+    s.enabled = 0 if s.enabled else 1
+    db.commit()
+    return {"source_name": source_name, "enabled": bool(s.enabled)}
 
 
 @router.post("/import/payroll")
