@@ -56,7 +56,7 @@ def parse_pdf(pdf_path: str | Path) -> list[dict]:
                     continue
                 if len(pos) < 2 or len(pos) > 30:
                     continue
-                if lo > hi or lo < 50 or hi > 5000:
+                if lo > hi or lo < 1 or hi > 10_000_000:
                     continue
                 key = (pos, lo, hi)
                 if key in seen:
@@ -65,9 +65,30 @@ def parse_pdf(pdf_path: str | Path) -> list[dict]:
                 rows.append({
                     "position": pos,
                     "level": infer_level(pos),
-                    "low_k": lo,
-                    "high_k": hi,
+                    "raw_low": lo,
+                    "raw_high": hi,
                 })
+
+    # 自动推断单位：按所有行的中位数判断
+    # 千元：中位数 50-5000（如 300-600）
+    # 万元：中位数 5-200（如 30-60）
+    # 元：中位数 > 10000（如 300000-600000）
+    if not rows:
+        return []
+    med = sorted((r["raw_low"] + r["raw_high"]) / 2 for r in rows)[len(rows) // 2]
+    if med < 20:
+        unit = "wan"  # 万元
+        mult = 10000
+    elif med > 10000:
+        unit = "yuan"  # 元
+        mult = 1
+    else:
+        unit = "k"  # 千元
+        mult = 1000
+    for r in rows:
+        r["low_k"] = round(r["raw_low"] * mult / 1000, 1)  # 统一存千元
+        r["high_k"] = round(r["raw_high"] * mult / 1000, 1)
+        r["unit_detected"] = unit
     return rows
 
 

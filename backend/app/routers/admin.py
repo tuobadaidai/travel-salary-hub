@@ -143,3 +143,54 @@ async def upload_report(file: UploadFile, source_label: str = "Michael Page 2026
 
     return {"added": added, "skipped": skipped, "parsed": len(rows), "filename": file.filename,
             "source_tag": source_tag}
+
+
+# ---------- 触发采集任务 ----------
+
+# 已注册的采集任务：name → 可调用对象（无参数，阻塞运行）
+_AVAILABLE_JOBS: dict[str, dict] = {
+    "jobui_companies": {
+        "label": "jobui 公司薪酬子页",
+        "desc": "采集 6 家竞争公司×岗位薪酬子页（携程/美团/同程/众信/马蜂窝/阿里）",
+    },
+    "jobui_batch": {
+        "label": "jobui 城市聚合",
+        "desc": "按城市×岗位抓 jobui 聚合页",
+    },
+}
+
+
+def _run_jobui_companies():
+    """在子进程/线程里跑，避免 import 时连数据库。"""
+    import subprocess
+    import sys
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parents[3]
+    subprocess.Popen(
+        [sys.executable, "-m", "pipeline.run_companies"],
+        cwd=str(project_root / "backend"),
+        stdout=open(project_root / "data" / "logs" / "jobui_companies.log", "a"),
+        stderr=subprocess.STDOUT,
+    )
+
+
+@router.get("/jobs")
+def list_jobs():
+    """列出可触发的采集任务。"""
+    return [{"name": k, **v} for k, v in _AVAILABLE_JOBS.items()]
+
+
+@router.post("/trigger/{job_name}")
+def trigger_job(job_name: str):
+    """触发一个采集任务（后台异步跑，立即返回）。"""
+    if job_name not in _AVAILABLE_JOBS:
+        raise HTTPException(404, f"unknown job: {job_name}. available: {list(_AVAILABLE_JOBS)}")
+    import threading
+    from pathlib import Path
+    log_dir = Path(__file__).resolve().parents[3] / "data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    if job_name == "jobui_companies":
+        threading.Thread(target=_run_jobui_companies, daemon=True).start()
+        return {"status": "started", "job": job_name, "note": "后台运行中，刷新批次记录看结果"}
+    raise HTTPException(400, f"job {job_name} trigger not wired yet")

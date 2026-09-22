@@ -67,6 +67,27 @@ async function onUpload(file: UploadFile) {
 
 const uploadingPdf = ref(false)
 const reportLabel = ref("Michael Page 2026")
+
+interface JobItem { name: string; label: string; desc: string }
+const jobs = ref<JobItem[]>([])
+const triggering = ref("")
+
+async function loadJobs() {
+  try { jobs.value = await api.http.get("/admin/jobs").then(r => r.data) } catch {}
+}
+async function triggerJob(name: string) {
+  triggering.value = name
+  try {
+    await api.http.post(`/admin/trigger/${name}`)
+    ElMessage.success("已触发，后台运行中，1 分钟后刷新批次记录")
+    setTimeout(load, 5000)
+  } catch (e) {
+    ElMessage.error("触发失败: " + (e as Error).message)
+  } finally {
+    triggering.value = ""
+  }
+}
+
 async function onUploadReport(file: UploadFile) {
   if (!file.raw) return false
   uploadingPdf.value = true
@@ -89,7 +110,7 @@ async function onUploadReport(file: UploadFile) {
   return false
 }
 
-onMounted(load)
+onMounted(() => { load(); loadJobs() })
 </script>
 
 <template>
@@ -155,6 +176,23 @@ onMounted(load)
     </el-card>
 
     <el-card shadow="never">
+      <template #header>在线采集任务</template>
+      <div v-for="j in jobs" :key="j.name" class="job-row">
+        <div class="job-info">
+          <div class="job-label">{{ j.label }}</div>
+          <div class="job-desc">{{ j.desc }}</div>
+        </div>
+        <el-button size="small" type="primary" :loading="triggering===j.name" @click="triggerJob(j.name)">
+          立即运行
+        </el-button>
+      </div>
+      <p class="note">
+        采集任务后台异步运行，完成后在下方"采集批次记录"查看结果。新渠道（51job/智联/看准/Levels.fyi）
+        正在接入中，完成后会自动出现在这里。
+      </p>
+    </el-card>
+
+    <el-card shadow="never">
       <template #header>
         <div class="head">
           <span>采集批次记录（最近 50 次）</span>
@@ -196,5 +234,9 @@ export default { components: { UploadFilled } }
 .note code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; }
 .label-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .chip-label { font-size: 12px; color: #909399; }
+.job-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+.job-row:last-of-type { border-bottom: none; }
+.job-label { font-weight: 600; font-size: 14px; }
+.job-desc { font-size: 12px; color: #909399; margin-top: 2px; }
 .head { display: flex; justify-content: space-between; align-items: center; }
 </style>
