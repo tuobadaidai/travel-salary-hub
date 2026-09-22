@@ -157,6 +157,10 @@ _AVAILABLE_JOBS: dict[str, dict] = {
         "label": "jobui 城市聚合",
         "desc": "按城市×岗位抓 jobui 聚合页",
     },
+    "levels_fyi": {
+        "label": "Levels.fyi（中国区）",
+        "desc": "通过 Apify 抓字节/阿里/腾讯/美团薪酬分位（需配置 APIFY_TOKEN）",
+    },
 }
 
 
@@ -193,4 +197,20 @@ def trigger_job(job_name: str):
     if job_name == "jobui_companies":
         threading.Thread(target=_run_jobui_companies, daemon=True).start()
         return {"status": "started", "job": job_name, "note": "后台运行中，刷新批次记录看结果"}
+    if job_name == "levels_fyi":
+        from app.config import settings
+        if not settings.apify_token:
+            raise HTTPException(400, "未配置 APIFY_TOKEN。请先在 .env 或环境变量设置后再触发。")
+        def _run_lf():
+            import subprocess
+            import sys
+            project_root = Path(__file__).resolve().parents[3]
+            subprocess.Popen(
+                [sys.executable, "-m", "pipeline.run_levels_fyi"],
+                cwd=str(project_root / "backend"),
+                stdout=open(log_dir / "levels_fyi.log", "a"),
+                stderr=subprocess.STDOUT,
+            )
+        threading.Thread(target=_run_lf, daemon=True).start()
+        return {"status": "started", "job": job_name, "note": "Apify 任务已触发，通常 1-3 分钟完成"}
     raise HTTPException(400, f"job {job_name} trigger not wired yet")
