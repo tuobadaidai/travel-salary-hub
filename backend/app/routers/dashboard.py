@@ -113,3 +113,10 @@ def get_trend(
 def get_overseas(title: str | None = None, db: Session = Depends(get_db)):
     """海外驻地视图（F6）：内部驻地薪酬（国家×级别）+ 市场海外记录（低置信）。"""
     return stats.overseas_stats(db, title)
+
+
+@router.get("/stats/exec-summary")
+def get_exec_summary(db: Session = Depends(get_db)):
+    """高管薪酬分析聚合（首页）：水位定位 + 人效分析 + 岗位族×级别矩阵。"""
+    from app.services.exec_summary import exec_summary
+    return exec_summary(db)

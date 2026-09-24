@@ -101,6 +101,36 @@ export interface CountryEntry {
   by_level: Record<string, QuantileItem>
 }
 
+export interface ExecLevel {
+  level: string
+  dida: QuantileItem | null
+  market: QuantileItem | null
+  gap_pct: number | null
+  verdict: string
+}
+
+export interface EffCompany {
+  company: string
+  company_type: string
+  employees: number
+  revenue_yi: number | null
+  total_comp_yi: number | null
+  avg_comp_wan: number | null
+  avg_rev_wan: number | null
+  rev_per_comp: number | null
+  confidence: string
+}
+
+export interface ExecSummary {
+  positioning: { levels: ExecLevel[] }
+  efficiency: { fiscal_year: number; companies: EffCompany[] }
+  matrix: {
+    levels: string[]
+    families: string[]
+    matrix: Record<string, Record<string, QuantileItem>>
+  }
+}
+
 export interface GradeCell {
   tier: 1 | 2 | 3
   dida: QuantileItem | null
@@ -150,6 +180,8 @@ export const api = {
     http.get<Heatmap>("/stats/heatmap", { params }).then(r => r.data),
   overseas: (params: { title?: string }) =>
     http.get<OverseasData>("/stats/overseas", { params }).then(r => r.data),
+  execSummary: () =>
+    http.get<ExecSummary>("/stats/exec-summary").then(r => r.data),
   records: (params: { position?: string; level?: string; city?: string; limit?: number }) =>
     http.get<DrillRecord[]>("/records", { params }).then(r => r.data),
 }
