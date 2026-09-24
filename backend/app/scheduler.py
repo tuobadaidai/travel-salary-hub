@@ -39,19 +39,49 @@ def _ensure_schedules(db):
 
 
 def _trigger_job(name: str):
-    """后台触发一个采集任务。"""
+    """阻塞执行采集任务，成功后写 last_success_at（SPEC S4）。"""
     cmd_map = {
-        "run_companies": ["python3", "-m", "pipeline.run_companies"],
+        "jobui_companies": ["python3", "-m", "pipeline.run_companies"],
     }
     cmd = cmd_map.get(name)
     if not cmd:
-        return
+        return False
+    started = datetime.now(timezone.utc)
     log_dir = PROJECT_ROOT / "data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{name}.log"
+    timed_out = False
     with open(log_path, "a") as f:
-        subprocess.Popen(cmd, cwd=str(PROJECT_ROOT / "backend"),
-                         stdout=f, stderr=subprocess.STDOUT)
+        f.write(f"\n=== scheduler trigger {started.isoformat()} ===\n")
+        f.flush()
+        try:
+            subprocess.run(cmd, cwd=str(PROJECT_ROOT / "backend"),
+                           stdout=f, stderr=subprocess.STDOUT, check=False,
+                           timeout=3 * 3600)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            f.write(f"[scheduler] {name} TIMEOUT after 3h\n")
+    if timed_out:
+        return False
+    # 只认触发之后新建的 CollectRun，避免旧 run 的 success 误标
+    db = SessionLocal()
+    try:
+        run = (db.query(CollectRun)
+               .filter_by(source_name=name)
+               .filter(CollectRun.started_at >= started.isoformat(timespec="seconds"))
+               .order_by(CollectRun.id.desc())
+               .first())
+        if run and run.status in ("success", "partial"):
+            sched = db.query(IngestSchedule).filter_by(source_name=name).first()
+            if sched:
+                sched.last_success_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                db.commit()
+            print(f"[scheduler] {name} ok (run #{run.id})")
+            return True
+        print(f"[scheduler] {name} finished with status={run.status if run else 'no-run'}")
+        return False
+    finally:
+        db.close()
 
 
 def scheduler_loop():
@@ -63,18 +93,23 @@ def scheduler_loop():
             _ensure_schedules(db)
             now = datetime.now(timezone.utc)
             for sched in db.query(IngestSchedule).filter_by(enabled=1).all():
-                if sched.source_name not in KNOWN_JOBS:
-                    continue
-                _, cadence_days = KNOWN_JOBS[sched.source_name]
-                last = sched.last_success_at or sched.last_run_at
-                if last:
-                    last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-                    if (now - last_dt).days < cadence_days:
+                try:
+                    if sched.source_name not in KNOWN_JOBS:
                         continue
-                print(f"[scheduler] triggering {sched.source_name}")
-                _trigger_job(sched.source_name)
-                sched.last_run_at = now.isoformat(timespec="seconds")
-                db.commit()
+                    _, cadence_days = KNOWN_JOBS[sched.source_name]
+                    last = sched.last_success_at or sched.last_run_at
+                    if last:
+                        last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                        if last_dt.tzinfo is None:
+                            last_dt = last_dt.replace(tzinfo=timezone.utc)
+                        if (now - last_dt).days < cadence_days:
+                            continue
+                    print(f"[scheduler] triggering {sched.source_name}")
+                    _trigger_job(sched.source_name)
+                    sched.last_run_at = now.isoformat(timespec="seconds")
+                    db.commit()
+                except Exception as e:
+                    print(f"[scheduler] {sched.source_name} error: {e}")
         except Exception as e:
             print(f"[scheduler] error: {e}")
         finally:

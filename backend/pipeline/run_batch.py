@@ -25,7 +25,7 @@ from pipeline.collectors.scraper import (  # noqa: E402
     raw_dump,
 )
 from pipeline.cleaning.normalize import classify_job_family  # noqa: E402
-from pipeline.ingest import DEFAULT_FX, backfill_job_families, init_db  # noqa: E402
+from pipeline.ingest import backfill_job_families, init_db  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import CollectRun, JobFamily, SalaryRecord  # noqa: E402
 from pipeline.cleaning.normalize import dedup_hash  # noqa: E402

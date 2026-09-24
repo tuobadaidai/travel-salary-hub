@@ -82,10 +82,12 @@ def import_xlsx(path: str) -> tuple[int, int]:
         monthly = float(monthly)
         seq = g("序列") or ""
         grade = g("职级") or g("等效国内职级（新）") or ""
+        currency = g("币种") or "CNY"
         level = GRADE_TO_LEVEL.get(grade)
         loc = g("工作地点") or ""
+        # hash 含 currency：原始币种变了（改薪/换驻地）视为新记录；monthly 已是 CNY 折算
         pay_hash = hashlib.sha1(
-            "|".join([title, seq, grade, f"{monthly:.2f}", loc]).encode()).hexdigest()
+            "|".join([title, seq, grade, currency, f"{monthly:.2f}", loc]).encode()).hexdigest()
         exists = con.execute("SELECT 1 FROM dida_payroll WHERE pay_hash=?", (pay_hash,)).fetchone()
         if exists:
             skipped += 1
@@ -94,7 +96,7 @@ def import_xlsx(path: str) -> tuple[int, int]:
             "INSERT INTO dida_payroll (title, dept_l1, seq, grade, grade_equiv, level, monthly_cny, "
             "annual_cny, currency, location, pay_hash, imported_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (title, g("一级部门"), seq or None, grade or None, g("等效国内职级（新）"), level,
-             monthly, monthly * 12, g("币种") or "CNY", loc, pay_hash, now))
+             monthly, monthly * 12, currency, loc, pay_hash, now))
         added += 1
     con.commit()
     con.close()

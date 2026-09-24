@@ -89,12 +89,33 @@ export interface GradeMeta {
   count: number
 }
 
+export interface OverseasData {
+  internal: { countries: CountryEntry[]; total: number }
+  market: { by_city: Record<string, QuantileItem>; total: number }
+}
+
+export interface CountryEntry {
+  country: string
+  count: number
+  currencies: Record<string, number>
+  by_level: Record<string, QuantileItem>
+}
+
+export interface GradeCell {
+  tier: 1 | 2 | 3
+  dida: QuantileItem | null
+  market_ref: QuantileItem | null
+  gap_pct: number | null
+}
+
 export interface GradeBenchmark {
   position: string
   grades: GradeMeta[]
   cities: string[]
+  cells: Record<string, Record<string, GradeCell>>
   market: Record<string, Record<string, QuantileItem>>
   dida: Record<string, Record<string, QuantileItem>>
+  market_band: Record<string, QuantileItem>
   national_reference: {
     labels: string[]
     by_grade: Record<string, QuantileItem>
@@ -127,6 +148,8 @@ export const api = {
     http.get<GradeBenchmark>("/benchmark-by-grade", { params }).then(r => r.data),
   heatmap: (params: { row_dim: string; col_dim: string }) =>
     http.get<Heatmap>("/stats/heatmap", { params }).then(r => r.data),
+  overseas: (params: { title?: string }) =>
+    http.get<OverseasData>("/stats/overseas", { params }).then(r => r.data),
   records: (params: { position?: string; level?: string; city?: string; limit?: number }) =>
     http.get<DrillRecord[]>("/records", { params }).then(r => r.data),
 }

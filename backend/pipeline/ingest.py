@@ -42,6 +42,30 @@ DEFAULT_FX = {
 
 def init_db():
     Base.metadata.create_all(engine)
+    db = SessionLocal()
+    try:
+        seed_fx_rates(db)
+        db.commit()
+    finally:
+        db.close()
+
+
+def get_fx(cur: str) -> float:
+    """查 fx_rates 最新汇率；miss 时 fallback DEFAULT_FX 快照并告警。"""
+    if cur == "CNY":
+        return 1.0
+    db = SessionLocal()
+    try:
+        row = (db.query(FxRate)
+               .filter(FxRate.currency == cur)
+               .order_by(FxRate.rate_date.desc())
+               .first())
+        if row:
+            return float(row.rate_to_cny)
+    finally:
+        db.close()
+    print(f"[fx] WARN {cur} 不在 fx_rates，用默认快照")
+    return DEFAULT_FX.get(cur, 1.0)
 
 
 def seed_fx_rates(db):

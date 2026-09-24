@@ -30,7 +30,7 @@ from pipeline.cleaning.normalize import (  # noqa: E402
     normalize_city,
     normalize_position,
 )
-from pipeline.ingest import DEFAULT_FX, init_db  # noqa: E402
+from pipeline.ingest import get_fx, init_db  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import CollectRun, JobFamily, SalaryRecord  # noqa: E402
 
@@ -198,7 +198,7 @@ def aggregate_amounts(candidates: list[dict], city_cn: str) -> dict | None:
         native = _CITY_NATIVE_CURRENCIES.get(city_cn)
         if native and c["currency"] not in native | _INTERNATIONAL_CURRENCIES:
             continue
-        fx = DEFAULT_FX.get(c["currency"], 7.0)
+        fx = get_fx(c["currency"])
         if c["kind"] == "annual":
             # 年薪 < 5万CNY 多为月薪误标或小币种噪声
             if lo * fx < _ANNUAL_CNY_FLOOR:
@@ -264,7 +264,7 @@ def collect_city_position(db, run_id: int, family_map: dict, city_cn: str, city_
     else:
         monthly_low, monthly_high = low_med, hi_med
     # 明显离谱（月薪 > 200k 等值 CNY）跳过
-    if monthly_low * DEFAULT_FX.get(cur, 1.0) > 200000:
+    if monthly_low * get_fx(cur) > 200000:
         print(f"  OUTLIER {city_cn}/{pos_cn}: {cur} {monthly_low:.0f}/mo")
         return 0, 0
 
@@ -297,7 +297,7 @@ def collect_city_position(db, run_id: int, family_map: dict, city_cn: str, city_
         city=city_norm,
         country=country,
         currency=cur,
-        annual_salary_avg_base=annual_avg * DEFAULT_FX.get(cur, 7.0),
+        annual_salary_avg_base=annual_avg * get_fx(cur),
         level=infer_level(pos_cn),
         sample_count=n,
         extra_json=json.dumps({"basis": "search_snippet", "confidence": "low",

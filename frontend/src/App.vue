@@ -4,6 +4,7 @@ import { useRoute } from "vue-router"
 const route = useRoute()
 const crumb = computed(() => {
   if (route.path.startsWith("/benchmark")) return { crumb: "岗位对标", sub: "按 DIDA 职级 apple-to-apple 对标" }
+  if (route.path.startsWith("/overseas")) return { crumb: "海外驻地", sub: "F6 · 驻外员工薪酬与市场对照" }
   if (route.path.startsWith("/dashboard")) return { crumb: "总览", sub: "薪酬水位 vs 市场" }
   if (route.path.startsWith("/companies")) return { crumb: "竞争公司库", sub: "19 家 OTA / 旅行 B2B" }
   if (route.path.startsWith("/data")) return { crumb: "数据维护", sub: "采集批次与质量告警" }
@@ -25,6 +26,9 @@ const crumb = computed(() => {
         <div class="nav-label">工作台</div>
         <router-link to="/benchmark" class="nav-item">
           <span class="dot"></span>岗位对标
+        </router-link>
+        <router-link to="/overseas" class="nav-item">
+          <span class="dot"></span>海外驻地
         </router-link>
         <router-link to="/dashboard" class="nav-item">
           <span class="dot"></span>总览

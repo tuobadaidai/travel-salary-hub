@@ -19,7 +19,7 @@ from pipeline.collectors.scraper import infer_level  # noqa: E402
 from pipeline.cleaning.normalize import (  # noqa: E402
     classify_job_family, dedup_hash, normalize_city, normalize_position,
 )
-from pipeline.ingest import DEFAULT_FX, init_db  # noqa: E402
+from pipeline.ingest import get_fx, init_db  # noqa: E402
 from pipeline.run_overseas import aggregate_amounts, extract_amounts  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.models import CollectRun, JobFamily, SalaryRecord  # noqa: E402
@@ -86,7 +86,7 @@ def main():
             monthly_low, monthly_high = agg["low"] / 12, agg["high"] / 12
         else:
             monthly_low, monthly_high = agg["low"], agg["high"]
-        if monthly_low * DEFAULT_FX.get(cur, 1.0) > 200000:
+        if monthly_low * get_fx(cur) > 200000:
             print(f"  OUTLIER {city_cn}/{pos_cn}: {cur} {monthly_low:.0f}/mo")
             miss += 1
             continue
@@ -123,7 +123,7 @@ def main():
             city=city_norm,
             country=country,
             currency=cur,
-            annual_salary_avg_base=annual_avg * DEFAULT_FX.get(cur, 7.0),
+            annual_salary_avg_base=annual_avg * get_fx(cur),
             level=infer_level(pos_cn),
             sample_count=agg["n"],
             extra_json=json.dumps({"basis": "search_snippet", "confidence": "low",

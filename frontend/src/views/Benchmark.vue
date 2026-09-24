@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { ElMessage } from "element-plus"
 import {
-  api, type GradeBenchmark, type GradeMeta, type PositionItem, type DrillRecord, type QuantileItem,
+  api, type GradeBenchmark, type GradeCell, type GradeMeta, type PositionItem, type DrillRecord,
 } from "../api/salary"
 
 const route = useRoute()
@@ -34,26 +34,32 @@ const cities = computed(() => {
   return cityFilter.value.length ? all.filter(c => cityFilter.value.includes(c)) : all
 })
 
-function cell(src: Record<string, Record<string, QuantileItem>> | undefined, g: string, ct: string): QuantileItem | null {
-  return src?.[g]?.[ct] ?? null
+function cell(g: string, ct: string): GradeCell | null {
+  return matrix.value?.cells?.[g]?.[ct] ?? null
+}
+function hasData(c: GradeCell | null): boolean {
+  return !!(c && (c.dida || c.market_ref))
 }
 
-function gapPct(g: string, ct: string): number | null {
-  const m = cell(matrix.value?.market, g, ct)
-  const d = cell(matrix.value?.dida, g, ct)
-  if (!m || !d || !m.reliable || m.p50 === 0) return null
-  return (d.p50 - m.p50) / m.p50
+const TIER_TIP: Record<number, string> = {
+  1: "本职级 × 本城市 DIDA 样本 ≥5，直接对标同城市场",
+  2: "本城市样本不足，展示本职级全国 P50（样本≥5），市场参照为全国同级别带",
+  3: "DIDA 样本不足 5，仅展示市场级别带参照（内部数字灰显仅供参考）",
 }
-function gapCls(g: string, ct: string): string {
-  const p = gapPct(g, ct)
-  if (p == null) return "flat"
-  if (Math.abs(p) < 0.05) return "flat"
-  return p > 0 ? "up" : "down"
+function tierTip(c: GradeCell): string {
+  const parts = [TIER_TIP[c.tier]]
+  if (c.dida && !c.dida.reliable) parts.push(`内部样本仅 ${c.dida.count} 人`)
+  return parts.join("；")
 }
-function gapTxt(g: string, ct: string): string {
-  const p = gapPct(g, ct)
-  if (p == null) return "—"
-  return (p > 0 ? "+" : "") + (p * 100).toFixed(1) + "%"
+
+function gapCls(c: GradeCell): string {
+  if (c.gap_pct == null) return "flat"
+  if (Math.abs(c.gap_pct) < 0.05) return "flat"
+  return c.gap_pct > 0 ? "up" : "down"
+}
+function gapTxt(c: GradeCell): string {
+  if (c.gap_pct == null) return "—"
+  return (c.gap_pct > 0 ? "+" : "") + (c.gap_pct * 100).toFixed(1) + "%"
 }
 
 function toggleCity(c: string) {
@@ -64,10 +70,9 @@ function toggleCity(c: string) {
   // 清空时视为"全部"
   if (!cityFilter.value.length) cityFilter.value = all.slice()
 }
-function barWidth(g: string, ct: string): string {
-  const p = gapPct(g, ct)
-  if (p == null) return "0%"
-  return Math.min(100, Math.abs(p) * 100 * 3) + "%"
+function barWidth(c: GradeCell): string {
+  if (c.gap_pct == null) return "0%"
+  return Math.min(100, Math.abs(c.gap_pct) * 100 * 3) + "%"
 }
 
 async function loadMatrix() {
@@ -86,15 +91,17 @@ async function loadMatrix() {
 }
 
 async function openDrill(grade: GradeMeta, ct: string) {
-  const m = cell(matrix.value?.market, grade.code, ct)
-  const d = cell(matrix.value?.dida, grade.code, ct)
+  const c = cell(grade.code, ct)
   drillTitle.value = `${selected.value} · ${ct} · ${grade.code} ${grade.title}`
-  drillSub.value = `市场 P50 ${wan(m?.p50)} 万 · DIDA P50 ${wan(d?.p50)} 万`
+  drillSub.value = [
+    `DIDA P50 ${wan(c?.dida?.p50)} 万（${c?.dida?.count ?? 0} 人）`,
+    `市场参照 P50 ${wan(c?.market_ref?.p50)} 万（tier${c?.tier ?? "-"}）`,
+  ].join(" · ")
   try {
     drillRows.value = await api.records({
       position: selected.value,
       level: grade.market_level ?? undefined,
-      city: ct,
+      city: ct === "全国" ? undefined : ct,
       limit: 50,
     })
   } catch (e) {
@@ -162,7 +169,7 @@ watch([selected, cityFilter], loadMatrix, { deep: true })
     <div class="card" v-loading="loading">
       <div class="card-head">
         <h3>DIDA 职级 × 城市 薪酬矩阵（万元/年）</h3>
-        <span class="hint">红=DIDA 高于市场 · 绿=DIDA 低于市场 · 灰=样本&lt;5</span>
+        <span class="hint">①职级×城市直对标 ②全国职级对标 ③市场级别带参照 · 灰=样本&lt;5 · 红=高于市场 · 绿=低于市场</span>
       </div>
       <div class="card-body matrix-wrap" v-if="matrix">
         <table class="matrix">
@@ -179,15 +186,25 @@ watch([selected, cityFilter], loadMatrix, { deep: true })
                 <div class="g-meta">DIDA 在册 {{ g.count }} 人</div>
               </th>
               <td v-for="ct in cities" :key="ct" class="cell"
-                :class="{empty: !(cell(matrix.market, g.code, ct) || cell(matrix.dida, g.code, ct))}"
+                :class="{empty: !hasData(cell(g.code, ct)), tier3: cell(g.code, ct)?.tier === 3}"
                 @click="openDrill(g, ct)">
-                <template v-if="cell(matrix.market, g.code, ct) || cell(matrix.dida, g.code, ct)">
+                <template v-if="hasData(cell(g.code, ct))">
                   <div class="row1">
-                    <span class="mkt">市场 P50 <b>{{ wan(cell(matrix.market, g.code, ct)?.p50) }}</b> 万</span>
-                    <span class="gap" :class="gapCls(g.code, ct)">{{ gapTxt(g.code, ct) }}</span>
+                    <span class="tier-badge" :title="tierTip(cell(g.code, ct)!)">{{ cell(g.code, ct)!.tier }}</span>
+                    <span class="gap" :class="gapCls(cell(g.code, ct)!)">{{ gapTxt(cell(g.code, ct)!) }}</span>
                   </div>
-                  <div class="dida">DIDA P50 <b>{{ wan(cell(matrix.dida, g.code, ct)?.p50) }}</b> 万</div>
-                  <div class="bar"><i :class="gapCls(g.code, ct)" :style="{width: barWidth(g.code, ct)}"></i></div>
+                  <div class="dida">
+                    <template v-if="cell(g.code, ct)!.dida">
+                      DIDA P50 <b :class="{low: !cell(g.code, ct)!.dida!.reliable}">{{ wan(cell(g.code, ct)!.dida!.p50) }}</b> 万
+                      <span v-if="!cell(g.code, ct)!.dida!.reliable" class="low-tag">n{{ cell(g.code, ct)!.dida!.count }}</span>
+                    </template>
+                    <template v-else>内部无数据</template>
+                  </div>
+                  <div class="mkt" v-if="cell(g.code, ct)!.market_ref">
+                    市场 P50 <b>{{ wan(cell(g.code, ct)!.market_ref!.p50) }}</b> 万
+                  </div>
+                  <div class="mkt dim" v-else>市场无参照</div>
+                  <div class="bar"><i :class="gapCls(cell(g.code, ct)!)" :style="{width: barWidth(cell(g.code, ct)!)}"></i></div>
                 </template>
                 <template v-else>无数据</template>
               </td>
@@ -295,7 +312,19 @@ table.matrix td.cell.empty {
   color: var(--text-3);
 }
 .cell .row1 { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.cell .tier-badge {
+  font-size: 10.5px; font-weight: 700; width: 16px; height: 16px; line-height: 16px;
+  border-radius: 50%; background: var(--brand); color: #fff; text-align: center;
+  cursor: help; flex-shrink: 0;
+}
+.cell.tier3 .tier-badge { background: var(--border-strong); color: var(--text-2); }
+.cell.tier3 .dida b.low { color: var(--text-3); }
+.cell .low-tag {
+  font-size: 10px; color: var(--text-3); border: 1px solid var(--border-strong);
+  border-radius: 3px; padding: 0 3px; margin-left: 2px;
+}
 .cell .mkt { font-size: 11.5px; color: var(--text-3); }
+.cell .mkt.dim { color: var(--text-3); opacity: 0.7; }
 .cell .mkt b { color: var(--text); font-size: 13.5px; font-weight: 600; }
 .cell .gap { font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; }
 .gap.up { color: var(--warn); background: var(--warn-soft); }

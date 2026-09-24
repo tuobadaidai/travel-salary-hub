@@ -107,3 +107,9 @@ def get_trend(
     return stats.trend_by_month(
         db, city=city, company_type=company_type, job_family_id=job_family_id, country=country,
     )
+
+
+@router.get("/stats/overseas")
+def get_overseas(title: str | None = None, db: Session = Depends(get_db)):
+    """海外驻地视图（F6）：内部驻地薪酬（国家×级别）+ 市场海外记录（低置信）。"""
+    return stats.overseas_stats(db, title)
